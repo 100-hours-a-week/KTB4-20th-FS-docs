@@ -1,0 +1,93 @@
+name: "설계 변경"
+description: "기존 설계와 수정된 설계를 비교합니다."
+title: "[Design] "
+body:
+  - type: input
+    id: target
+    attributes:
+      label: 변경 대상
+      placeholder: "예: 로그인 화면, 여행 일정 생성 기능"
+    validations:
+      required: true
+
+  - type: input
+    id: purpose
+    attributes:
+      label: 변경 목적
+      placeholder: "설계를 변경한 목적을 작성해주세요."
+    validations:
+      required: true
+
+  - type: input
+    id: date
+    attributes:
+      label: 작성일
+      placeholder: "YYYY-MM-DD"
+    validations:
+      required: false
+
+  - type: textarea
+    id: comparison
+    attributes:
+      label: 기존 설계와 수정된 설계 비교
+      description: "표 안의 내용을 수정해주세요."
+      value: |
+        | 항목 | 기존 설계 | 수정된 설계 |
+        | --- | --- | --- |
+        | 구조 | [기존 구조] | [수정된 구조] |
+        | 사용자 흐름 | [기존 흐름] | [수정된 흐름] |
+        | 주요 기능 | [기존 기능] | [수정된 기능] |
+    validations:
+      required: true
+
+  - type: textarea
+    id: reasons
+    attributes:
+      label: 수정한 이유
+      placeholder: |
+        - 기존 설계의 문제점
+        - 수정이 필요했던 이유
+        - 수정을 통해 해결하려는 문제
+    validations:
+      required: true
+
+  - type: textarea
+    id: advantages
+    attributes:
+      label: 변경 시 장점
+      placeholder: |
+        - 장점 1
+        - 장점 2
+        - 장점 3
+    validations:
+      required: true
+
+  - type: textarea
+    id: disadvantages
+    attributes:
+      label: 변경 시 단점
+      placeholder: |
+        - 단점 1
+        - 단점 2
+        - 단점에 대한 대응 방법
+    validations:
+      required: true
+
+  - type: textarea
+    id: conclusion
+    attributes:
+      label: 결론
+      placeholder: "변경된 설계를 적용하는 것이 적절한지, 그 이유와 함께 작성해주세요."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: decision
+    attributes:
+      label: 최종 결정
+      options:
+        - 적용
+        - 보류
+        - 기존 설계 유지
+    validations:
+      required: true
