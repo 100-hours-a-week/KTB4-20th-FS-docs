@@ -433,6 +433,15 @@ ALTER TABLE `refresh_tokens` ADD CONSTRAINT `PK_REFRESH_TOKENS` PRIMARY KEY (
 	`id`
 );
 
+ALTER TABLE `refresh_tokens` ADD CONSTRAINT `UK_REFRESH_TOKENS_TOKEN_HASH` UNIQUE (
+	`token_hash`
+);
+
+CREATE INDEX `IDX_REFRESH_TOKENS_USER_REVOKED` ON `refresh_tokens` (
+	`user_id`,
+	`revoked_at`
+);
+
 ALTER TABLE `weather_schedule_decisions` ADD CONSTRAINT `PK_WEATHER_SCHEDULE_DECISIONS` PRIMARY KEY (
 	`id`
 );
@@ -458,6 +467,13 @@ ALTER TABLE `mission_photos` ADD CONSTRAINT `PK_MISSION_PHOTOS` PRIMARY KEY (
 );
 
 ALTER TABLE `users` ADD CONSTRAINT `PK_USERS` PRIMARY KEY (
+	`id`
+);
+
+ALTER TABLE `refresh_tokens` ADD CONSTRAINT `FK_USERS_TO_REFRESH_TOKENS` FOREIGN KEY (
+	`user_id`
+)
+REFERENCES `users` (
 	`id`
 );
 
