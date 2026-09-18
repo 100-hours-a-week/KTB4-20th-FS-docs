@@ -8,9 +8,11 @@
 
 ## 2. 공통 여행 지역 규칙
 
-- 서비스에서 지원하는 광역·하위 여행 지역은 운영 전에 `regions` 테이블에 기준정보로 미리 등록한다.
-- `regions`의 한 행은 광역·하위 지역 정보를 함께 가지며, API의 `regionId`는 해당 행의 PK인 `regions.id`다.
-- `broad_region_code`, `broad_region_name`, `sub_region_code`, `sub_region_name`은 모두 필수 기준정보이며 기본값을 사용하지 않는다.
+- 서비스에서 지원하는 광역 여행 지역은 `broad_regions`, 하위 여행 지역은 `sub_regions` 테이블에 운영 전에 기준정보로 미리 등록한다.
+- `sub_regions.broad_region_id`는 소속 광역 지역의 `broad_regions.id`를 참조한다.
+- API의 `regionId`는 최종 선택한 하위 지역의 PK인 `sub_regions.id`이며 광역 지역은 해당 행의 `broad_region_id`로 조회한다.
+- `broad_regions.broad_region_code`, `broad_regions.broad_region_name`, `sub_regions.sub_region_code`, `sub_regions.sub_region_name`은 모두 필수 기준정보이며 기본값을 사용하지 않는다.
+- 세종특별자치시는 `broad_regions`에 광역 지역을 등록하고, `sub_regions`에 화면에서 최종 선택할 `세종시 전체` 하위 지역을 별도 등록한다.
 - `regionId`는 광역 지역 코드나 하위 지역 코드 자체가 아니다.
 - 여행방 생성 요청에서는 최종 선택한 `regionId` 하나만 전달한다.
 - `regionId` 누락은 `400 INVALID_REQUEST`, 존재하지 않는 값은 `404 REGION_NOT_FOUND`로 처리한다.
@@ -81,8 +83,8 @@ Authorization: Bearer {accessToken}
 
 ### 처리 규칙
 
-- 서버는 `regions` 행을 `broadRegionCode`와 `broadRegionName` 기준으로 묶고 각 그룹의 하위 지역을 `subRegions`로 반환한다.
-- `regionId`는 BIGINT PK이므로 JSON에서 10진수 문자열로 반환한다.
+- 서버는 `broad_regions`와 `sub_regions`를 `sub_regions.broad_region_id = broad_regions.id`로 조인하고, 각 광역 지역의 하위 지역을 `subRegions`로 반환한다.
+- `regionId`는 `sub_regions.id` BIGINT PK이므로 JSON에서 10진수 문자열로 반환한다.
 - 지역 기준정보는 여행방 생성에 필수이므로 `regions: []`를 정상 응답으로 반환하지 않는다.
 - 지역 기준정보를 조회할 수 없으면 클라이언트는 다음 단계로 진행시키지 않고 오류 화면과 재시도를 제공한다.
 
@@ -124,7 +126,7 @@ Content-Type: application/json
 | --- | --- | --- | --- | --- | --- |
 | Header | `Idempotency-Key` | string(UUIDv7) | Y | 같은 사용자 동작의 재시도에는 같은 값 사용 | 중복 여행방 생성 방지 |
 | Body | `name` | string | Y | 앞뒤 공백 제거 후 1~12자 | 여행방 이름 |
-| Body | `regionId` | string | Y | `regions.id`의 10진수 문자열 | 선택한 여행 지역 |
+| Body | `regionId` | string | Y | `sub_regions.id`의 10진수 문자열 | 선택한 하위 여행 지역 |
 | Body | `startDate` | string(date) | Y | 서울 날짜 기준 최소 내일 | 여행 시작일 |
 | Body | `endDate` | string(date) | Y | 시작일 이상, 포함 최대 10일 | 여행 종료일 |
 | Body | `capacity` | integer | N | 기본값 4, 2~8 | 방장을 포함한 정원 |

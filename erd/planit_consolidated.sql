@@ -96,10 +96,15 @@ CREATE TABLE `users` (
 	`gender`	VARCHAR(10)	NULL
 );
 
-CREATE TABLE `regions` (
-	`id`	BIGINT	NOT NULL	COMMENT '지역 ID',
-	`broad_region_code`	VARCHAR(50)	NULL,
-	`broad_region_name`	VARCHAR(50)	NOT NULL,
+CREATE TABLE `broad_regions` (
+	`id`	BIGINT	NOT NULL	COMMENT '광역 지역 ID',
+	`broad_region_code`	VARCHAR(50)	NOT NULL,
+	`broad_region_name`	VARCHAR(50)	NOT NULL
+);
+
+CREATE TABLE `sub_regions` (
+	`id`	BIGINT	NOT NULL	COMMENT '하위 지역 ID',
+	`broad_region_id`	BIGINT	NOT NULL	COMMENT '소속 광역 지역 ID',
 	`sub_region_code`	VARCHAR(50)	NOT NULL,
 	`sub_region_name`	VARCHAR(50)	NOT NULL,
 	`latitude`	DECIMAL(9,6)	NULL,
@@ -182,6 +187,16 @@ CREATE TABLE `chat_violations` (
 	`occurred_at`	DATETIME(6)	NOT NULL	DEFAULT CURRENT_TIMESTAMP(6)
 );
 
+CREATE TABLE `chat_prohibited_terms` (
+	`id`	BIGINT	NOT NULL	COMMENT '채팅 금칙어 ID',
+	`term`	VARCHAR(100)	NOT NULL	COMMENT '운영자가 관리하는 원본 금칙어',
+	`normalized_term`	VARCHAR(100)	NOT NULL	COMMENT '메시지 판정에 사용하는 정규화 금칙어',
+	`match_type`	VARCHAR(20)	NOT NULL	DEFAULT 'CONTAINS'	COMMENT 'EXACT, CONTAINS',
+	`is_active`	BOOLEAN	NOT NULL	DEFAULT TRUE,
+	`created_at`	DATETIME(6)	NOT NULL	DEFAULT CURRENT_TIMESTAMP(6),
+	`updated_at`	DATETIME(6)	NOT NULL	DEFAULT CURRENT_TIMESTAMP(6)
+);
+
 CREATE TABLE `chat_sanctions` (
 	`id`	BIGINT	NOT NULL	COMMENT '채팅 이용 정지 ID',
 	`user_id`	BIGINT	NOT NULL	COMMENT '제재 사용자 ID',
@@ -191,7 +206,7 @@ CREATE TABLE `chat_sanctions` (
 	`duration_days`	TINYINT	NOT NULL	COMMENT '1, 4, 7, 14, 30, 60일',
 	`starts_at`	DATETIME(6)	NOT NULL,
 	`ends_at`	DATETIME(6)	NOT NULL,
-	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'ACTIVE'	COMMENT 'ACTIVE, EXPIRED, LIFTED',
+	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'ACTIVE'	COMMENT 'ACTIVE, EXPIRED',
 	`updated_at`	DATETIME(6)	NOT NULL	DEFAULT CURRENT_TIMESTAMP(6)
 );
 
@@ -315,7 +330,7 @@ CREATE TABLE `mission_participations` (
 
 CREATE TABLE `trips` (
 	`id`	BIGINT	NOT NULL	COMMENT '여행방 ID',
-	`region_id`	BIGINT	NOT NULL	COMMENT '선택한 광역 지역 ID',
+	`sub_region_id`	BIGINT	NOT NULL	COMMENT '선택한 하위 지역 ID',
 	`name`	VARCHAR(12)	NOT NULL	COMMENT '여행방 이름, 최대 12자',
 	`start_date`	DATE	NOT NULL	COMMENT '여행 시작일',
 	`end_date`	DATE	NOT NULL	COMMENT '여행 종료일',
@@ -331,7 +346,7 @@ CREATE TABLE `chat_messages` (
 	`sender_user_id`	BIGINT	NOT NULL	COMMENT '발신 사용자 ID',
 	`client_message_id`	BINARY(16)	NOT NULL	COMMENT '클라이언트 중복 전송 방지 ID',
 	`message_type`	VARCHAR(20)	NOT NULL	COMMENT 'TEXT, IMAGE',
-	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'VISIBLE'	COMMENT 'VISIBLE, BLOCKED, DELETED',
+	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'VISIBLE'	COMMENT 'VISIBLE, BLOCKED',
 	`blocked_reason`	VARCHAR(100)	NULL	COMMENT '반복, 과속, 금지 표현 등 차단 사유',
 	`created_at`	DATETIME(6)	NOT NULL	DEFAULT CURRENT_TIMESTAMP(6)
 );
@@ -422,7 +437,7 @@ CREATE TABLE `mission_generation_jobs` (
 CREATE TABLE `text_chat_messages` (
 	`id`	BIGINT	NOT NULL,
 	`chat_message_id`	BIGINT	NOT NULL	COMMENT '공개 채팅 메시지 ID',
-	`text_content`	VARCHAR(1000)	NULL
+	`text_content`	VARCHAR(1000)	NOT NULL	COMMENT '정규화 후 Unicode 코드 포인트 기준 1~1000자'
 );
 
 ALTER TABLE `regional_chat_room_members` ADD CONSTRAINT `PK_REGIONAL_CHAT_ROOM_MEMBERS` PRIMARY KEY (
@@ -477,7 +492,11 @@ REFERENCES `users` (
 	`id`
 );
 
-ALTER TABLE `regions` ADD CONSTRAINT `PK_REGIONS` PRIMARY KEY (
+ALTER TABLE `broad_regions` ADD CONSTRAINT `PK_BROAD_REGIONS` PRIMARY KEY (
+	`id`
+);
+
+ALTER TABLE `sub_regions` ADD CONSTRAINT `PK_SUB_REGIONS` PRIMARY KEY (
 	`id`
 );
 
@@ -507,6 +526,15 @@ ALTER TABLE `survey_place_preferences` ADD CONSTRAINT `PK_SURVEY_PLACE_PREFERENC
 
 ALTER TABLE `chat_violations` ADD CONSTRAINT `PK_CHAT_VIOLATIONS` PRIMARY KEY (
 	`id`
+);
+
+ALTER TABLE `chat_prohibited_terms` ADD CONSTRAINT `PK_CHAT_PROHIBITED_TERMS` PRIMARY KEY (
+	`id`
+);
+
+ALTER TABLE `chat_prohibited_terms` ADD CONSTRAINT `UK_CHAT_PROHIBITED_TERMS_NORMALIZED_TYPE` UNIQUE (
+	`normalized_term`,
+	`match_type`
 );
 
 ALTER TABLE `chat_sanctions` ADD CONSTRAINT `PK_CHAT_SANCTIONS` PRIMARY KEY (
@@ -571,6 +599,11 @@ ALTER TABLE `trips` ADD CONSTRAINT `PK_TRIPS` PRIMARY KEY (
 
 ALTER TABLE `chat_messages` ADD CONSTRAINT `PK_CHAT_MESSAGES` PRIMARY KEY (
 	`id`
+);
+
+ALTER TABLE `chat_messages` ADD CONSTRAINT `UK_CHAT_MESSAGES_SENDER_CLIENT_MESSAGE` UNIQUE (
+	`sender_user_id`,
+	`client_message_id`
 );
 
 ALTER TABLE `schedule_days` ADD CONSTRAINT `PK_SCHEDULE_DAYS` PRIMARY KEY (

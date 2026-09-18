@@ -1075,7 +1075,7 @@ Authorization: Bearer {accessToken}
 
 ### 처리 규칙
 
-- 서버는 `regionId`로 `regions.broad_region_name`을 조회해 사용자 검색어 앞에 공백으로 결합한 값을 Google Places API에 전달한다.
+- 서버는 `regionId`로 `sub_regions`를 조회하고 `sub_regions.broad_region_id = broad_regions.id`로 조인해 얻은 `broad_regions.broad_region_name`을 사용자 검색어 앞에 공백으로 결합한 값을 Google Places API에 전달한다.
 - 결합한 광역 지역명은 검색창과 응답에 노출하지 않는다. 좌표나 행정구역 코드로 결과를 사후 제외하지 않으므로 특정 지역 포함을 보장하는 하드 필터가 아니다.
 - cursor에는 다음 Google Places 검색 페이지와 `regionId`, 검색어 문맥을 서버만 해석할 수 있는 형태로 담는다. 검색 조건이 달라지면 기존 cursor를 사용할 수 없다.
 - 검색 결과는 이 API에서 `places`에 저장하지 않는다. 사용자가 결과를 선택했을 때 선택 장소 저장 API를 호출한다.

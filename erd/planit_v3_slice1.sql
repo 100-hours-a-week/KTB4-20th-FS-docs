@@ -78,24 +78,38 @@ CREATE TABLE refresh_tokens (
         ON DELETE SET NULL ON UPDATE RESTRICT
 ) ENGINE=InnoDB COMMENT='회전 및 재사용 탐지용 Refresh Token 이력';
 
-CREATE TABLE regions (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '지역 ID',
-    parent_region_id BIGINT UNSIGNED NULL COMMENT '상위 광역 지역 ID',
-    code VARCHAR(50) NOT NULL COMMENT '서비스 지역 코드',
-    name VARCHAR(100) NOT NULL COMMENT '지역명',
-    region_level VARCHAR(20) NOT NULL COMMENT 'METROPOLITAN, SUBREGION',
-    is_active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '서비스 제공 여부',
+CREATE TABLE broad_regions (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '광역 지역 ID',
+    broad_region_code VARCHAR(50) NOT NULL COMMENT '서비스 광역 지역 코드',
+    broad_region_name VARCHAR(50) NOT NULL COMMENT '광역 지역명',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
-    UNIQUE KEY uk_regions_code (code),
-    KEY idx_regions_parent_active (parent_region_id, is_active),
-    CONSTRAINT chk_regions_level
-        CHECK (region_level IN ('METROPOLITAN', 'SUBREGION')),
-    CONSTRAINT fk_regions_parent
-        FOREIGN KEY (parent_region_id) REFERENCES regions (id)
+    UNIQUE KEY uk_broad_regions_code (broad_region_code),
+    UNIQUE KEY uk_broad_regions_name (broad_region_name)
+) ENGINE=InnoDB COMMENT='광역 여행 지역 기준정보';
+
+CREATE TABLE sub_regions (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '하위 지역 ID',
+    broad_region_id BIGINT UNSIGNED NOT NULL COMMENT '소속 광역 지역 ID',
+    sub_region_code VARCHAR(50) NOT NULL COMMENT '서비스 하위 지역 코드',
+    sub_region_name VARCHAR(50) NOT NULL COMMENT '하위 지역명',
+    latitude DECIMAL(9, 6) NULL COMMENT '하위 지역 대표 위도',
+    longitude DECIMAL(9, 6) NULL COMMENT '하위 지역 대표 경도',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sub_regions_code (sub_region_code),
+    UNIQUE KEY uk_sub_regions_broad_name (broad_region_id, sub_region_name),
+    KEY idx_sub_regions_broad_region (broad_region_id),
+    CONSTRAINT chk_sub_regions_latitude
+        CHECK (latitude IS NULL OR latitude BETWEEN -90.0 AND 90.0),
+    CONSTRAINT chk_sub_regions_longitude
+        CHECK (longitude IS NULL OR longitude BETWEEN -180.0 AND 180.0),
+    CONSTRAINT fk_sub_regions_broad_region
+        FOREIGN KEY (broad_region_id) REFERENCES broad_regions (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT
-) ENGINE=InnoDB COMMENT='광역 및 하위 여행 지역';
+) ENGINE=InnoDB COMMENT='하위 여행 지역 기준정보';
 
 CREATE TABLE places (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '장소 ID',
@@ -119,13 +133,12 @@ CREATE TABLE places (
     CONSTRAINT chk_places_latitude
         CHECK (latitude BETWEEN -90.0 AND 90.0),
     CONSTRAINT fk_places_region
-        FOREIGN KEY (region_id) REFERENCES regions (id)
+        FOREIGN KEY (region_id) REFERENCES sub_regions (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB COMMENT='카카오 장소 검색 결과의 서비스 저장본';
 
 CREATE TABLE trips (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '여행방 ID',
-    broad_region_id BIGINT UNSIGNED NOT NULL COMMENT '선택한 광역 지역 ID',
     sub_region_id BIGINT UNSIGNED NOT NULL COMMENT '선택한 하위 지역 ID',
     name VARCHAR(12) NOT NULL COMMENT '여행방 이름, 최대 12자',
     start_date DATE NOT NULL COMMENT '여행 시작일',
@@ -144,13 +157,8 @@ CREATE TABLE trips (
         CHECK (capacity BETWEEN 2 AND 8),
     CONSTRAINT chk_trips_date_range
         CHECK (start_date <= end_date AND DATEDIFF(end_date, start_date) <= 9),
-    CONSTRAINT chk_trips_regions
-        CHECK (broad_region_id <> sub_region_id),
-    CONSTRAINT fk_trips_broad_region
-        FOREIGN KEY (broad_region_id) REFERENCES regions (id)
-        ON DELETE RESTRICT ON UPDATE RESTRICT,
     CONSTRAINT fk_trips_sub_region
-        FOREIGN KEY (sub_region_id) REFERENCES regions (id)
+        FOREIGN KEY (sub_region_id) REFERENCES sub_regions (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB COMMENT='그룹 여행의 기준 단위';
 

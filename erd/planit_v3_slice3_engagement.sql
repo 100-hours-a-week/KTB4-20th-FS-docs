@@ -9,7 +9,7 @@
 
 CREATE TABLE regional_chat_rooms (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '지역 공개 채팅방 ID',
-    region_id BIGINT UNSIGNED NOT NULL COMMENT '행정구역 ID',
+    region_id BIGINT UNSIGNED NOT NULL COMMENT '하위 지역 ID',
     name VARCHAR(100) NOT NULL COMMENT '채팅방 표시명',
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE, INACTIVE',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -19,7 +19,7 @@ CREATE TABLE regional_chat_rooms (
     CONSTRAINT chk_regional_chat_rooms_status
         CHECK (status IN ('ACTIVE', 'INACTIVE')),
     CONSTRAINT fk_regional_chat_rooms_region
-        FOREIGN KEY (region_id) REFERENCES regions (id)
+        FOREIGN KEY (region_id) REFERENCES sub_regions (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB COMMENT='여행방과 무관한 행정구역별 공개 채팅';
 
@@ -166,7 +166,7 @@ CREATE TABLE community_posts (
         FOREIGN KEY (schedule_version_id) REFERENCES schedule_versions (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT,
     CONSTRAINT fk_community_posts_region
-        FOREIGN KEY (region_id) REFERENCES regions (id)
+        FOREIGN KEY (region_id) REFERENCES sub_regions (id)
         ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB COMMENT='여행 종료 후 자동 공개되는 확정 일정';
 
