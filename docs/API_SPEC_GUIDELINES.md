@@ -307,6 +307,40 @@ body가 있는 JSON 응답은 다음 필드를 기본으로 사용한다.
 - 서버는 현재 `Accept-Language`에 따른 응답 메시지 번역을 제공하지 않는다.
 - 내부 예외명, SQL, 스택 트레이스, 외부 API의 민감한 원문 오류를 응답하지 않는다.
 - 사용자에게 구분할 필요가 없는 AI·외부 API 내부 실패는 안전한 공통 코드로 응답하고 상세 원인은 로그에 남긴다.
+- 공통 응답 구조가 구현된 이후 개발하는 모든 HTTP API는 성공과 오류 응답에 이 구조를 재사용한다. 도메인별로 별도의 응답 envelope를 만들지 않는다.
+- `204 No Content`처럼 HTTP 규약상 body가 없는 응답은 공통 envelope 적용 대상에서 제외한다.
+
+필드 단위 검증 오류의 `reason`은 다음 값만 사용한다. 검증 어노테이션의 기본 메시지나 내부 예외 메시지를 `reason`으로 노출하지 않는다.
+
+| `reason` | 발생 조건 |
+| --- | --- |
+| `REQUIRED` | 필수 필드가 없거나 `null`, 빈 문자열 또는 빈 컬렉션임 |
+| `INVALID_FORMAT` | 문자열 패턴, 이메일, URL 등 형식이 유효하지 않음 |
+| `INVALID_LENGTH` | 문자열 또는 컬렉션 길이가 허용 범위를 벗어남 |
+| `OUT_OF_RANGE` | 숫자 또는 날짜 값이 허용 범위를 벗어남 |
+| `INVALID_VALUE` | 허용값, enum 또는 그 밖의 필드 검증 조건을 만족하지 않음 |
+
+#### 6.1.1 공통 응답 구현과 사용 규칙
+
+공통 응답과 오류 처리 기반은 백엔드에 `IMPLEMENTED` 상태다. 단위 테스트로 각 구성요소를 검증했으며 실제 Controller와 Security Filter Chain을 통한 HTTP 통합 동작은 아직 `VERIFIED`가 아니다.
+
+| 구성요소 | 책임 | 도메인 개발 시 사용 방법 |
+| --- | --- | --- |
+| `ApiResponse<T>` | `code`, `message`, `data`, 선택적 `errors`로 JSON 응답 통일 | body가 있는 성공 응답은 `ApiResponse.success(...)`로 생성한다. |
+| `ApiFieldError` | 필드명과 검증 실패 `reason` 표현 | 도메인에서 별도 필드 오류 DTO를 만들지 않는다. |
+| `ErrorCode` | HTTP 상태, 안정적인 오류 코드와 기본 한글 메시지 관리 | 해당 도메인 개발 태스크에서 명세에 있는 도메인 오류를 추가한다. |
+| `BusinessException` | 예상 가능한 비즈니스 실패 전달 | 서비스 계층에서 명세에 대응하는 `ErrorCode`를 담아 발생시킨다. |
+| `GlobalExceptionHandler` | 비즈니스 예외, 요청 검증 실패와 예상하지 못한 예외를 공통 응답으로 변환 | Controller에서 동일한 예외 변환 코드를 반복하지 않는다. |
+| `SecurityErrorResponseWriter` | Security 계층의 JSON 오류 응답 생성 | 인증·인가 처리기가 공통 envelope를 반환할 때 사용한다. |
+| `CustomAuthenticationEntryPoint` | 인증 실패를 `401 AUTHENTICATION_REQUIRED`로 변환 | 인증 구현 시 Security Filter Chain의 authentication entry point로 연결한다. |
+| `CustomAccessDeniedHandler` | 인가 실패를 `403 ACCESS_DENIED`로 변환 | 인증 구현 시 Security Filter Chain의 access denied handler로 연결한다. |
+
+- Controller는 성공 결과와 성공 코드를 `ApiResponse.success(...)`로 반환한다.
+- 서비스 계층에서 예상 가능한 도메인 실패가 발생하면 해당 도메인의 `ErrorCode`를 가진 `BusinessException`을 발생시킨다.
+- 요청 DTO, Query Parameter, Path Variable과 필수 Header 검증 실패는 `GlobalExceptionHandler`가 `INVALID_REQUEST`로 변환한다.
+- 예상하지 못한 예외는 내부 상세를 응답에 노출하지 않고 `INTERNAL_SERVER_ERROR`로 변환하며, 원인은 서버 로그에 기록한다.
+- 도메인별 ControllerAdvice, 공통 응답 DTO 또는 동일 의미의 예외 처리기를 중복 생성하지 않는다.
+- Security 오류 처리 구성요소는 구현됐지만 현재 Security Filter Chain에는 연결되지 않았다. 인증 도메인 구현 시 연결하고 실제 401·403 HTTP 통합 테스트를 추가해야 한다.
 
 ### 6.2 body가 없는 응답
 
@@ -455,6 +489,10 @@ body가 있는 JSON 응답은 다음 필드를 기본으로 사용한다.
 
 - 필드별 검증 실패는 `INVALID_REQUEST`와 `errors` 배열을 함께 사용한다.
 - 여행 정원 초과나 설문 마감처럼 클라이언트가 별도로 처리해야 하는 비즈니스 오류 코드는 각 도메인 API 묶음에서 정의한다.
+- 공통 오류 기반 구현 태스크는 이 절의 공통 오류 코드와 공통 응답·예외 변환 구조만 구현한다. 모든 도메인의 비즈니스 오류를 선행해 한꺼번에 구현하지 않는다.
+- 각 도메인 개발 태스크는 자신이 구현하는 API 명세에 기재된 도메인 오류 코드를 확인하고, 필요한 오류 코드·메시지·비즈니스 예외와 예외 변환 테스트를 해당 태스크 범위에서 함께 구현할 책임이 있다.
+- 도메인 개발 중 새로운 오류 조건이 필요한 경우에는 구현 전에 해당 도메인 API 명세에 HTTP 상태, 오류 코드와 발생 조건을 먼저 추가한다. 명세에 없는 도메인 오류 코드를 구현에서 임의로 추가하지 않는다.
+- 이미 구현된 공통 오류 코드와 응답 생성 구조를 재사용하며, 동일한 의미의 오류 코드·응답 DTO·예외 처리기를 도메인 내부에 중복 정의하지 않는다.
 
 ## 11. 작성 및 검토 체크리스트
 
@@ -474,6 +512,9 @@ body가 있는 JSON 응답은 다음 필드를 기본으로 사용한다.
 - [ ] 배열·객체·숫자·boolean 타입이 예시와 일치한다.
 - [ ] 리소스 ID가 승인된 생성 방식과 JSON 표현을 따른다.
 - [ ] 오류 응답이 내부 정보나 비밀값을 노출하지 않는다.
+- [ ] 성공과 오류 응답이 승인된 공통 envelope를 사용한다. 단, `204 No Content`는 제외한다.
+- [ ] 이번 개발 범위에서 발생하는 도메인 오류 코드가 해당 도메인 명세와 구현에 함께 반영되어 있다.
+- [ ] 공통 또는 기존 도메인 오류와 의미가 같은 오류 코드·응답 구조를 중복 생성하지 않는다.
 
 ### 도메인과 운영
 
@@ -487,4 +528,6 @@ body가 있는 JSON 응답은 다음 필드를 기본으로 사용한다.
 
 ## 12. 공통 정책 승인 상태
 
-개별 API 작성 전에 필요한 공통 정책은 승인됐다. 성공 코드와 도메인별 비즈니스 오류 코드는 각 API 묶음을 상세화하면서 누적한다.
+개별 API 작성 전에 필요한 공통 정책은 승인됐다. 공통 응답 구조, 공통 오류 코드, 비즈니스 예외와 MVC·Security 오류 응답 구성요소는 `IMPLEMENTED`다. 단위 테스트는 통과했지만 실제 Controller 요청과 Security Filter Chain을 통한 통합 동작은 아직 `VERIFIED`가 아니다.
+
+성공 코드와 도메인별 비즈니스 오류 코드는 각 도메인 API 묶음을 상세화하고 개발하는 태스크가 명세·구현·테스트를 함께 책임지며 누적한다. 공통 응답 구조 구현 이후의 모든 도메인 HTTP API는 승인된 공통 envelope와 예외 변환 구조를 사용한다.

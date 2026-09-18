@@ -2,6 +2,7 @@
 
 ## 1. 공통 정책
 
+- HTTP 성공·오류 응답과 도메인 오류 구현 책임은 [`API_SPEC_GUIDELINES.md`](./API_SPEC_GUIDELINES.md)의 공통 규약을 따른다.
 - 이 문서의 사용자용 HTTP API 5개는 `APPROVED`다.
 - 커뮤니티는 로그인 사용자만 접근할 수 있으며 모든 API에 Access Token이 필요하다.
 - 여행 종료 시점의 `ACTIVE` 확정 일정 버전을 `community_posts.schedule_id`로 연결해 자동 공개한다.

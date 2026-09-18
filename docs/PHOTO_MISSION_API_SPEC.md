@@ -2,6 +2,7 @@
 
 ## 1. 문서 상태와 공통 정책
 
+- HTTP 성공·오류 응답과 도메인 오류 구현 책임은 [`API_SPEC_GUIDELINES.md`](./API_SPEC_GUIDELINES.md)의 공통 규약을 따른다.
 - 미션 생성 시작과 생성 상태 API는 생성 시점·재시도 정책이 보류되어 `DRAFT`다.
 - 나머지 사용자용 HTTP API 9개는 `APPROVED`다.
 - 미래 Day의 미션은 생성·조회·수행할 수 없다. 현재 Day와 지난 Day의 미션은 여행 종료일까지 수행할 수 있다.

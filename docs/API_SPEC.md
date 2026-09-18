@@ -13,6 +13,8 @@
 이 문서는 승인된 계약과 설계 초안을 구분한다. `APPROVED`는 합의된 계약이며, 코드와 테스트가 생기기 전에는 `IMPLEMENTED` 또는 `VERIFIED`로 표시하지 않는다.
 DDL의 타입과 제약조건은 참고 자료이며, 이 문서에서 별도로 승인하지 않은 내용을 API 계약으로 자동 적용하지 않는다.
 
+공통 응답과 오류 처리 기반 중 `SecurityErrorResponseWriter`, `CustomAuthenticationEntryPoint`, `CustomAccessDeniedHandler`는 `IMPLEMENTED`됐다. 다만 현재 Security Filter Chain에 연결되지 않았으므로 실제 인증·인가 실패 HTTP 응답은 아직 `VERIFIED`가 아니다. 인증 구현 시 각각 authentication entry point와 access denied handler로 연결하고 `401 AUTHENTICATION_REQUIRED`, `403 ACCESS_DENIED` 응답을 통합 테스트한다.
+
 ## 2. 인증·토큰 공통 계약
 
 ### 2.1 승인된 정책

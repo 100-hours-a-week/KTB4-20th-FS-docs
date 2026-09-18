@@ -2,6 +2,7 @@
 
 ## 1. 문서 상태와 책임 분리
 
+- HTTP 성공·오류 응답과 도메인 오류 구현 책임은 [`API_SPEC_GUIDELINES.md`](./API_SPEC_GUIDELINES.md)의 공통 규약을 따른다.
 - 이 문서의 HTTP API 7개는 `APPROVED`다.
 - 실시간 메시지 송수신은 Native WebSocket 기반 Spring WebSocket + STOMP와 Simple Broker로 구현한다. 연결·메시지 destination과 STOMP `CONNECT` Bearer Token 인증을 포함한 실시간 계약은 `APPROVED`다.
 - HTTP는 채팅방 목록, 정책 동의, 입퇴장, 과거 메시지와 이미지 업로드 준비를 담당한다.

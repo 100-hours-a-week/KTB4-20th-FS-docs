@@ -14,9 +14,12 @@
 - 커뮤니티 상세 계약: [`COMMUNITY_API_SPEC.md`](./COMMUNITY_API_SPEC.md)
 - 포토 미션 상세 계약: [`PHOTO_MISSION_API_SPEC.md`](./PHOTO_MISSION_API_SPEC.md)
 - 알림 상세 계약: [`NOTIFICATION_API_SPEC.md`](./NOTIFICATION_API_SPEC.md)
-- 백엔드 구현이 없으므로 `IMPLEMENTED`, `VERIFIED` 상태를 사용하지 않는다.
+- 공통 응답 구조, 공통 오류 코드, 비즈니스 예외와 MVC·Security 오류 응답 구성요소는 백엔드에 `IMPLEMENTED`됐다. 개별 도메인 API는 해당 코드와 통합 테스트가 확인되기 전까지 `IMPLEMENTED` 또는 `VERIFIED`로 표시하지 않는다.
 - 개별 검토가 완료된 계약만 `APPROVED`로 표시하며, 아직 상세화하지 않은 Method와 URL은 `DRAFT`로 유지한다.
 - 화면 하나와 API 하나를 일대일로 대응시키지 않는다. 한 화면에 필요한 일관된 집계는 하나의 조회 응답으로 묶을 수 있다.
+- 공통 오류 기반 구현은 공통 응답 구조와 공통 오류 코드만 담당한다. 각 도메인 개발 태스크는 해당 상세 명세에 정의된 도메인 오류 코드·메시지·예외 변환과 테스트를 함께 구현한다.
+- 공통 응답 구조 구현 이후 개발하는 모든 HTTP API는 [`API_SPEC_GUIDELINES.md`](./API_SPEC_GUIDELINES.md)의 공통 envelope를 사용한다. 새로운 도메인 오류 조건은 구현 전에 해당 상세 명세에 먼저 기록한다.
+- Security의 401·403 JSON 응답 구성요소는 구현됐지만 Security Filter Chain 연결과 실제 HTTP 통합 검증은 인증 도메인 구현 범위에 남아 있다.
 
 ## 2. 범위 요약
 
