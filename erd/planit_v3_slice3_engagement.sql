@@ -29,11 +29,15 @@ CREATE TABLE chat_policy_versions (
     title VARCHAR(200) NOT NULL,
     content LONGTEXT NOT NULL COMMENT '사용자에게 표시할 정책 본문',
     status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT, ACTIVE, RETIRED',
+    active_slot TINYINT GENERATED ALWAYS AS (
+        CASE WHEN status = 'ACTIVE' THEN 1 ELSE NULL END
+    ) STORED COMMENT 'ACTIVE 정책 하나만 허용하는 UNIQUE 슬롯',
     effective_at DATETIME(6) NULL COMMENT '정책 적용 시각',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
     UNIQUE KEY uk_chat_policy_versions_version (version),
+    UNIQUE KEY uk_chat_policy_versions_active_slot (active_slot),
     CONSTRAINT chk_chat_policy_versions_status
         CHECK (status IN ('DRAFT', 'ACTIVE', 'RETIRED')),
     CONSTRAINT chk_chat_policy_versions_effective
