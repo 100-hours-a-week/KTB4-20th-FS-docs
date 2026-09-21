@@ -46,7 +46,7 @@ Authorization: Bearer {accessToken}
 
 | 위치 | 필드 | 타입 | 필수 | 제약·기본값 | 설명 |
 | --- | --- | --- | --- | --- | --- |
-| Query | `cursor` | string | N | 최초 요청 시 생략, 발급 후 30분 동안 유효 | 다음 페이지를 위한 불투명 cursor |
+| Query | `cursor` | string | N | 최초 요청 시 생략, 최초 목록 정렬 시점부터 5분 동안 유효 | 다음 페이지를 위한 불투명 cursor |
 
 ### 성공 응답
 
@@ -78,7 +78,7 @@ Authorization: Bearer {accessToken}
 | HTTP 상태 | API 코드 | 조건 |
 | ---: | --- | --- |
 | `200 OK` | `REGIONAL_CHAT_ROOMS_RETRIEVED` | 최초 또는 다음 채팅방 목록 조회 성공 |
-| `400 Bad Request` | `INVALID_CURSOR` | cursor 형식·서명·사용자 문맥이 유효하지 않거나 발급 후 30분이 지남 |
+| `400 Bad Request` | `INVALID_CURSOR` | cursor가 서버에 등록되지 않았거나 사용자 문맥이 유효하지 않거나 최초 목록 정렬 후 5분이 지남 |
 | `401 Unauthorized` | `AUTHENTICATION_REQUIRED` | Access Token이 없거나 유효하지 않음 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
 
@@ -88,12 +88,21 @@ Authorization: Bearer {accessToken}
 - 최초 요청은 20개, cursor를 포함한 추가 요청은 10개를 반환한다. 클라이언트가 조회 개수를 지정하는 `size` 파라미터는 사용하지 않는다.
 - 현재 사용자가 활성 멤버로 참여하고 있고 현재 날짜가 여행 시작일과 종료일 사이인 여행의 지역 채팅방을 먼저 배치한다. `relatedToMyTrip`은 이 조건을 충족하면 `true`다.
 - 같은 여행 관련 여부 안에서는 현재 사용자가 가입한 채팅방을 먼저 배치한다. `joined`는 채팅방 가입 이력이 활성 상태이면 `true`다.
-- 같은 여행 관련 여부와 가입 상태 안에서는 각 페이지 요청 시점의 `activeUserCount` 내림차순, `memberCount` 내림차순으로 정렬한다.
+- 같은 여행 관련 여부와 가입 상태 안에서는 최초 목록 요청 시점의 `activeUserCount` 내림차순, `memberCount` 내림차순으로 정렬한다.
 - 두 사용자 수가 같으면 `광역 지역명 + 하위 지역명`의 가나다순으로 정렬하고, 지역명도 같으면 `roomId` 오름차순으로 순서를 고정한다.
-- cursor는 사용자 문맥, 마지막 항목의 정렬 기준값과 발급·만료 시각을 서버만 해석할 수 있는 불투명 값으로 제공한다.
-- `activeUserCount`, `memberCount`와 사용자별 여행·가입 상태를 페이지 요청 시점마다 다시 평가하므로 다음 페이지 요청 전에 값이 바뀌면 항목의 중복 또는 누락이 발생할 수 있다.
+- 최초 목록 요청에서 전체 채팅방을 정렬한 뒤 정렬된 `roomId` 목록을 사용자별 스냅샷으로 저장한다. cursor는 이 스냅샷과 다음 조회 위치를 서버만 해석할 수 있는 불투명 값으로 제공한다.
+- 다음 페이지는 스냅샷의 `roomId` 순서를 사용하므로 탐색 중 정렬 기준값이 변경되어도 항목이 중복되거나 누락되지 않는다. 각 항목의 응답값은 페이지 요청 시점의 최신 값으로 조회하되 순서는 최초 스냅샷을 유지한다.
+- 스냅샷과 모든 후속 cursor는 최초 목록 정렬 시점부터 5분 동안 유효하다. 다음 cursor를 발급해도 만료 시각은 연장하지 않으며, 만료 후에는 cursor 없이 첫 페이지부터 다시 조회해야 한다.
+- cursor 없는 첫 페이지 요청이 들어오면 새 목록 조회로 간주하여 해당 사용자의 기존 목록 스냅샷을 모두 무효화한다.
+- 채팅방 가입이 성공하면 `joined` 정렬 상태가 변경되므로 트랜잭션 Commit 후 해당 사용자의 기존 목록 스냅샷을 모두 무효화한다. 이후 첫 페이지를 다시 조회하면 가입한 채팅방이 가입 우선순위에 따라 상단으로 이동한다.
 - 빈 목록은 `200 OK`, `items=[]`, `nextCursor=null`, `hasNext=false`로 반환한다.
 - `canJoin`은 현재 정책에 동의했을 때 `true`다. 활성 제재는 입장을 막지 않으며 실제 입장 API에서도 정책 동의 여부를 다시 검증한다.
+
+### 구현 메모
+
+- 현재 백엔드는 `trips`, `trip_members`, `regional_chat_room_members`의 JPA 엔티티가 없어 여행 관련 여부, 가입 여부, 회원 수와 정책 동의 여부를 Native Query로 조회한다.
+- 위 테이블의 엔티티와 연관관계가 추가되면 테이블명·컬럼명에 직접 의존하는 Native Query를 JPQL 기반 조회로 변경하고, 동일한 응답값과 정렬 결과가 유지되는지 Repository 통합 테스트로 검증해야 한다.
+- 현재 cursor 저장소는 사용자 문맥, 최초 정렬된 `roomId` 목록, 다음 조회 위치와 절대 만료 시각을 애플리케이션 메모리에 저장한다. 최초 조회와 다음 페이지 조회 모두 최신 응답값 계산을 위한 DB 조회를 수행하지만, 페이지 순서는 저장된 `roomId` 스냅샷을 따른다.
 
 ## 4. 현재 채팅 정책 조회
 
@@ -253,6 +262,7 @@ Authorization: Bearer {accessToken}
 | ---: | --- | --- |
 | `200 OK` | `REGIONAL_CHAT_ROOM_LEFT` | 퇴장 성공 또는 기존 퇴장 상태 반환 |
 | `401 Unauthorized` | `AUTHENTICATION_REQUIRED` | Access Token이 없거나 유효하지 않음 |
+| `403 Forbidden` | `REGIONAL_CHAT_MEMBER_REQUIRED` | 해당 채팅방에 가입한 이력이 없음 |
 | `404 Not Found` | `REGIONAL_CHAT_ROOM_NOT_FOUND` | 채팅방이 존재하지 않음 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
 
