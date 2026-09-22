@@ -443,13 +443,13 @@ Authorization: Bearer {accessToken}
 | 미구독 중 메시지 | `APPROVED` | 실시간 전달하지 않고 방 재진입 시 HTTP 이력으로 조회 |
 | 메시지 전송 destination | `APPROVED` | `/app/regional-chat-rooms/{roomId}/messages` |
 | 방 메시지 구독 destination | `APPROVED` | `/topic/regional-chat-rooms/{roomId}/messages` |
-| 개인 이벤트 구독 destination | `APPROVED` | `/user/queue/chat-events` |
+| 개인 이벤트 구독 destination | `APPROVED` | 메시지 처리 결과·정책·제재 알림은 `/user/queue/chat-events` 사용 |
 | 메시지 시각·정렬 | `APPROVED` | UTC `createdAt` 오름차순, 동률이면 `messageId` 오름차순 |
 | 반복·과속 제한 | `APPROVED` | 최소 300ms, 10초당 최대 10개, 동일 정규화 텍스트 30초 내 재전송 차단 |
 | 금지 표현 판정 | `APPROVED` | RDB `chat_prohibited_terms`의 활성 금칙어 사전으로 판정 |
 | 이미지 메시지 확정 | `APPROVED` | 객체 검증·영구 저장·DB Commit 후 공개, 썸네일은 비동기 생성 |
 | 애플리케이션 결과 이벤트 | `APPROVED` | 발신자에게만 `CHAT_MESSAGE_RESULT` 전달 |
-| 구독 결과 이벤트 | `APPROVED` | 구독 요청 세션에 `CHAT_ROOM_SUBSCRIPTION_RESULT` 전달 |
+| 구독 결과 | `APPROVED` | 요청 세션에 성공은 STOMP `RECEIPT`, 실패는 STOMP `ERROR` 프레임 전달 |
 | 공개 메시지 이벤트 | `APPROVED` | 승인된 방 구독자에게 `CHAT_MESSAGE_CREATED` 전달 |
 | 메시지 중복 방지 | `APPROVED` | 발신 사용자와 `clientMessageId` 조합으로 중복 저장 방지 |
 | 동일 사용자 동시 전송 | `APPROVED` | 서로 다른 세션·`clientMessageId` 요청을 별도 Lock이나 Queue 없이 독립 처리 |
@@ -470,7 +470,8 @@ Authorization: Bearer {accessToken}
 - 현재 화면에서 보고 있는 채팅방 하나만 `SUBSCRIBE`한다. 다른 방으로 이동할 때 기존 방을 `UNSUBSCRIBE`한 뒤 새 방을 `SUBSCRIBE`한다.
 - 가입했지만 현재 구독하지 않은 채팅방의 메시지는 실시간으로 전달하지 않는다. 해당 방에 다시 들어갈 때 HTTP 메시지 이력 API로 누락 메시지를 조회한다.
 - 방 메시지 `SUBSCRIBE`는 해당 채팅방의 활성 참여자에게만 허용하며 활성 제재 여부는 검사하지 않는다.
-- 구독 성공·실패는 요청한 세션의 `/user/queue/chat-events`에 `CHAT_ROOM_SUBSCRIPTION_RESULT`로 전달한다. 실패해도 WebSocket 연결은 종료하지 않으며 승인된 구독만 실시간 입장 상태와 `activeUserCount`에 반영한다.
+- 방 메시지 `SUBSCRIBE`에는 성공 확인용 고유 `receipt` 헤더를 포함한다. STOMP 규약상 헤더를 생략한 구독도 처리하지만 PlanIt 클라이언트의 채팅방 입장 흐름에서는 반드시 전송한다.
+- 구독에 성공하면 요청한 세션에 동일 값을 `receipt-id`로 가진 STOMP `RECEIPT` 프레임을 전달한다. 구독에 실패하면 오류 코드와 JSON 오류 응답을 포함한 STOMP `ERROR` 프레임을 전달한다. 실패해도 WebSocket 연결은 종료하지 않으며 승인된 구독만 실시간 입장 상태와 `activeUserCount`에 반영한다.
 - 메시지 `SEND`는 해당 채팅방의 활성 참여자이면서 제재 중이 아니고 현재 활성 정책에 동의한 사용자에게만 허용한다.
 - 새 정책 동의가 필요하면 연결·구독과 읽기는 유지하고 `SEND`만 `CHAT_POLICY_CONSENT_REQUIRED`로 거부한다. 새 정책 활성화 시 현재 모든 연결 세션에 동의 필요 이벤트를 전달하고 동의 후에는 재연결 없이 전송을 허용한다.
 - 텍스트와 이미지 메시지는 한 메시지에 동시에 포함하지 않는다.
@@ -558,21 +559,40 @@ Authorization: Bearer {accessToken}
 - `ACCEPTED`는 메시지가 `VISIBLE`로 저장된 결과, `BLOCKED`는 메시지가 `BLOCKED`로 저장됐지만 방에 발행되지 않은 결과, `REJECTED`는 메시지를 저장하지 않고 거부한 결과다.
 - DB 트랜잭션이 완료된 후 결과 이벤트를 발행한다. 이벤트가 유실되더라도 저장된 공개 메시지는 HTTP 메시지 이력 API로 복구한다.
 
-구독 성공 예시:
+### 채팅방 구독 결과 프레임
 
-```json
+채팅방 구독 요청 예시:
+
+```text
+SUBSCRIBE
+id:subscription-1
+destination:/topic/regional-chat-rooms/3001/messages
+receipt:subscribe-3001
+```
+
+구독 성공 시 요청한 세션에 다음 프레임을 전달한다.
+
+```text
+RECEIPT
+receipt-id:subscribe-3001
+```
+
+비가입자의 구독처럼 구독 검증에 실패하면 요청의 `receipt` 값을 `receipt-id`로 돌려주고 `message` 헤더에 오류 코드를 담는다.
+
+```text
+ERROR
+message:REGIONAL_CHAT_MEMBER_REQUIRED
+receipt-id:subscribe-3001
+content-type:application/json
+
 {
-  "eventType": "CHAT_ROOM_SUBSCRIPTION_RESULT",
-  "status": "ACCEPTED",
-  "code": "CHAT_ROOM_SUBSCRIBED",
-  "message": "채팅방 실시간 구독을 시작했습니다.",
-  "roomId": "3001",
-  "occurredAt": "2026-09-17T12:00:00.123456Z",
+  "code": "REGIONAL_CHAT_MEMBER_REQUIRED",
+  "message": "채팅방 참여가 필요합니다.",
   "data": null
 }
 ```
 
-비가입자의 구독은 같은 이벤트의 `status=REJECTED`, `code=REGIONAL_CHAT_MEMBER_REQUIRED`로 전달한다. 구독 결과 이벤트는 DB에 저장하지 않고 구독을 요청한 STOMP 세션 하나에만 전달한다.
+구독 결과 프레임은 DB에 저장하지 않고 구독을 요청한 STOMP 세션 하나에만 전달한다. `/user/queue/chat-events`는 구독 결과가 아니라 메시지 처리 결과와 정책·제재 관련 개인 이벤트에 사용한다.
 
 공개 메시지 예시:
 
@@ -736,8 +756,9 @@ Authorization: Bearer {accessToken}
 
 ### 최초 입장 시 이력과 실시간 메시지 결합
 
-- 클라이언트는 먼저 `/user/queue/chat-events`를 구독한 뒤 현재 방 destination을 구독한다.
-- `CHAT_ROOM_SUBSCRIPTION_RESULT`의 `ACCEPTED`를 확인한 다음 최신 HTTP 메시지 이력을 조회한다.
+- 클라이언트는 메시지 처리 결과와 정책·제재 알림을 위해 `/user/queue/chat-events`를 구독한다.
+- 현재 방 destination을 고유 `receipt` 헤더와 함께 `SUBSCRIBE`하고 같은 값을 `receipt-id`로 가진 `RECEIPT` 프레임을 확인한 다음 최신 HTTP 메시지 이력을 조회한다.
+- `ERROR` 프레임을 받으면 payload의 `code`, `message`를 사용해 실패를 처리하고 HTTP 메시지 이력을 조회하지 않는다.
 - HTTP 조회가 끝날 때까지 수신한 `CHAT_MESSAGE_CREATED` 이벤트는 클라이언트가 임시 보관한다.
 - HTTP 이력과 임시 보관한 실시간 메시지를 `messageId`로 중복 제거하고 서버 `createdAt`, `messageId` 오름차순으로 정렬해 표시한다.
 - 구독이 승인된 후 이력을 조회하므로 이력 요청 도중 생성된 메시지는 실시간 이벤트로 보완하며, 동일 메시지가 양쪽에 포함돼도 한 번만 표시한다.
