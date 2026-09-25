@@ -4,7 +4,7 @@
 
 - 공통 작성 규약은 [`API_SPEC_GUIDELINES.md`](./API_SPEC_GUIDELINES.md)를 따른다.
 - 이 문서에서 `APPROVED`로 표시한 계약만 확정된 계약이다.
-- 설문 문항의 표시 순서는 현재 보류 상태이며 관련 API를 확정할 때 별도로 결정한다.
+- 설문 문항은 `displayOrder` 오름차순으로 표시한다.
 
 ### 공통 설문 점수 정책
 
@@ -12,12 +12,52 @@
 - 제출 요청에는 모든 문항의 최종 선택값을 포함하며 허용 점수는 정수 `1~5`다.
 - 서버는 선택값을 가공하지 않고 `survey_answers.score`에 그대로 저장한다.
 - 그룹 결과는 0~100%로 환산하지 않는다. 제출 완료된 활성 멤버의 원본 점수를 카테고리별로 산술 평균하고 `1.0~5.0` 범위의 소수 첫째 자리로 반올림해 제공한다.
-- 제출 완료된 설문은 재제출할 수 있으며 기존 답변, 제외 카테고리와 꼭 가고 싶은 장소 전체를 원자적으로 교체한다.
+- 제출 완료된 설문은 재제출할 수 있으며 기존 답변과 제외 카테고리 전체를 원자적으로 교체한다.
 - 재제출 결과는 최신 설문 집계에 즉시 반영한다.
 - 이미 실행 중인 AI 생성 작업은 시작 시점의 불변 설문 스냅샷만 사용하므로 생성 도중 재제출된 내용은 해당 작업 결과에 반영하지 않는다.
+- V1 동기 일정 생성 요청도 요청 시작 시 수집한 설문 입력을 사용하며, 처리 중 재제출된 내용은 현재 요청 결과에 반영하지 않는다.
 - 최초 제출은 `survey_deadline_at`까지 허용한다.
 - 최초 제출을 완료한 활성 멤버의 재제출은 설문 마감이나 AI 생성 상태와 관계없이 서울 날짜 기준 여행 시작 전까지만 허용한다.
 - 마감 전에 제출하지 않은 멤버는 마감 후 재제출 규칙으로 새로 제출할 수 없다.
+
+### 설문 카탈로그 조회
+
+| 항목 | 내용 |
+| --- | --- |
+| 상태 | `IMPLEMENTED` |
+| Method | `GET` |
+| URL | `/api/preference-questions` |
+| 설명 | 고정 설문 문항과 선택 가능한 제외 카테고리를 조회한다. |
+| 인증 | Access Token 필수 |
+| 인가 | 로그인 사용자 |
+
+```json
+{
+  "code": "SURVEY_CATALOG_RETRIEVED",
+  "message": "설문 문항과 제외 카테고리를 조회했습니다.",
+  "data": {
+    "questions": [
+      {
+        "questionId": "1",
+        "code": "HISTORY_CULTURE_MUSEUM",
+        "categoryCode": "HISTORY_CULTURE",
+        "questionText": "나는 여행지에서 박물관이나 미술관을 방문하는 것을 좋아한다",
+        "displayOrder": 1
+      }
+    ],
+    "exclusionCategories": [
+      {
+        "categoryId": "1",
+        "code": "NOISY_PLACE",
+        "name": "시끄러운_곳"
+      }
+    ]
+  }
+}
+```
+
+- `questions`는 `displayOrder` 오름차순으로 반환한다.
+- `exclusionCategories`의 `categoryId`를 설문 제출의 `excludedCategoryIds`에 사용한다.
 
 ## 2. 선택 장소 저장
 
@@ -121,7 +161,7 @@ Content-Type: application/json
 | 상태 | `APPROVED` |
 | Method | `GET` |
 | URL | `/api/trips/{tripId}/survey` |
-| 설명 | 현재 여행 멤버의 설문 답변과 희망 장소를 조회한다. |
+| 설명 | 현재 여행 멤버의 설문 답변과 제외 카테고리를 조회한다. |
 | 인증 | Access Token 필수 |
 | 인가 | 해당 여행방의 활성 멤버 본인 |
 | 멱등성 | 조회 API이므로 별도 Key 불필요 |
@@ -141,33 +181,13 @@ Content-Type: application/json
         "score": 4
       }
     ],
-    "excludedCategories": [
-      {
-        "categoryId": "101",
-        "code": "SPICY_FOOD",
-        "name": "매운 음식"
-      },
-      {
-        "categoryId": "104",
-        "code": "LONG_WALK",
-        "name": "장거리 도보"
-      }
-    ],
-    "mustVisitPlaces": [
-      {
-        "placeId": "5001",
-        "name": "해운대 카페",
-        "categoryName": "음식점 > 카페"
-      }
-    ],
-    "submittedAt": "2026-09-07T17:10:00.123456+09:00",
-    "canInitialSubmit": false,
-    "canResubmit": true
+    "excludedCategoryIds": ["1", "4"],
+    "submittedAt": "2026-09-07T17:10:00.123456+09:00"
   }
 }
 ```
 
-설문을 아직 제출하지 않았으면 `status`는 `DRAFT`, `submittedAt`은 `null`, `excludedCategories`와 `mustVisitPlaces`는 빈 배열이다. `answers`에는 현재 문항별 초기 점수 `3`을 반환한다.
+설문을 아직 제출하지 않았으면 `status`는 `DRAFT`, `submittedAt`은 `null`, `excludedCategoryIds`는 빈 배열이다. `answers`에는 현재 문항별 초기 점수 `3`을 반환한다.
 
 | HTTP 상태 | API 코드 | 조건 |
 | ---: | --- | --- |
@@ -179,10 +199,8 @@ Content-Type: application/json
 
 ### 처리 규칙
 
-- `canInitialSubmit`은 미제출 상태이고 현재 시각이 `survey_deadline_at` 이하일 때만 `true`다.
-- `canResubmit`은 제출 완료 상태이고 서울 날짜가 `startDate`보다 이를 때만 `true`다.
 - 저장된 개인 점수는 정규화하지 않고 `1~5` 원본 값으로 반환한다.
-- 문항 표시 순서는 보류 중이므로 이 응답의 `answers` 배열 순서 계약도 아직 확정하지 않는다.
+- `answers`는 설문 문항의 `displayOrder` 오름차순으로 반환한다.
 
 ## 4. 내 설문 제출·수정
 
@@ -193,7 +211,7 @@ Content-Type: application/json
 | 상태 | `APPROVED` |
 | Method | `PUT` |
 | URL | `/api/trips/{tripId}/survey` |
-| 설명 | 현재 사용자의 전체 답변과 희망 장소를 최초 제출하거나 재제출한다. |
+| 설명 | 현재 사용자의 전체 답변과 제외 카테고리를 최초 제출하거나 재제출한다. |
 | 인증 | Access Token 필수 |
 | 인가 | 해당 여행방의 활성 멤버 본인 |
 | 멱등성 | 전체 상태를 교체하는 PUT, 별도 Key 불필요 |
@@ -218,8 +236,7 @@ Content-Type: application/json
       "score": 3
     }
   ],
-  "excludedCategoryIds": ["101", "104"],
-  "mustVisitPlaceIds": ["5001", "5002"]
+  "excludedCategoryIds": ["1", "4"]
 }
 ```
 
@@ -229,7 +246,6 @@ Content-Type: application/json
 | `answers[].questionId` | string | Y | BIGINT 10진수 문자열 | 문항 ID |
 | `answers[].score` | integer | Y | `1~5` | 가공 없이 저장할 선택값 |
 | `excludedCategoryIds` | string[] | Y | 0개 이상, 중복 불가 | 사전 등록된 일정 제외 카테고리 ID 목록 |
-| `mustVisitPlaceIds` | string[] | Y | 0~10개, 중복 불가 | 선택 장소 저장 API에서 받은 꼭 가고 싶은 장소 ID 목록 |
 
 ### 성공 응답
 
@@ -251,8 +267,7 @@ Content-Type: application/json
         "score": 3
       }
     ],
-    "excludedCategoryIds": ["101", "104"],
-    "mustVisitPlaceIds": ["5001", "5002"]
+    "excludedCategoryIds": ["1", "4"]
   }
 }
 ```
@@ -262,13 +277,11 @@ Content-Type: application/json
 | HTTP 상태 | API 코드 | 조건 |
 | ---: | --- | --- |
 | `200 OK` | `SURVEY_SAVED` | 최초 제출 또는 재제출 성공 |
-| `400 Bad Request` | `INVALID_REQUEST` | 문항 누락·중복, 잘못된 점수, 제외 카테고리·장소 중복 또는 장소 개수 위반 |
+| `400 Bad Request` | `INVALID_REQUEST` | 문항 누락·중복, 잘못된 점수 또는 제외 카테고리 중복 |
 | `401 Unauthorized` | `AUTHENTICATION_REQUIRED` | Access Token이 없거나 유효하지 않음 |
 | `403 Forbidden` | `TRIP_MEMBER_REQUIRED` | 해당 여행방의 활성 멤버가 아님 |
 | `404 Not Found` | `TRIP_NOT_FOUND` | 여행방이 없거나 소프트 삭제됨 |
 | `404 Not Found` | `EXCLUSION_CATEGORY_NOT_FOUND` | 존재하지 않는 제외 카테고리 ID가 포함됨 |
-| `404 Not Found` | `PLACE_NOT_FOUND` | `mustVisitPlaceIds` 중 저장된 장소가 없음 |
-| `409 Conflict` | `PLACE_REGION_MISMATCH` | 선택 장소의 `regionId`가 여행방 지역과 다름 |
 | `409 Conflict` | `SURVEY_SUBMISSION_CLOSED` | 미제출 상태에서 설문 마감 시각이 지남 |
 | `409 Conflict` | `SURVEY_RESUBMISSION_CLOSED` | 제출 완료 상태에서 서울 날짜 기준 여행이 시작됨 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
@@ -277,10 +290,251 @@ Content-Type: application/json
 
 - 미제출 설문은 현재 시각이 `survey_deadline_at` 이하일 때만 최초 제출할 수 있다.
 - 이미 제출한 설문은 설문 마감과 AI 생성 상태에 관계없이 서울 날짜가 `startDate`보다 이를 때 재제출할 수 있다.
-- 재제출은 기존 `survey_answers`, `survey_excluded_categories`와 `survey_place_preferences` 전체를 새 요청값으로 교체한다.
-- 답변·제외 카테고리·꼭 가고 싶은 장소 교체와 `submitted_at` 갱신은 하나의 트랜잭션으로 처리하며 실패하면 이전 제출 결과를 유지한다.
+- 재제출은 기존 `survey_answers`와 `survey_excluded_categories` 전체를 새 요청값으로 교체한다.
+- 답변·제외 카테고리 교체와 `submitted_at` 갱신은 하나의 트랜잭션으로 처리하며 실패하면 이전 제출 결과를 유지한다.
 - 재제출 성공 직후 최신 그룹 취향 집계를 다시 계산한다.
 - 실행 중인 AI 작업의 `schedule_generation_snapshots`와 생성 결과는 변경하지 않는다.
+- 실행 중인 V1 동기 일정 생성 요청이 이미 수집한 설문 입력과 생성 결과도 변경하지 않는다.
+
+## V1 추가 명세 — 동기 단일 일정
+
+V1에서는 AI 장소 추천과 백엔드 동선 계산의 책임을 분리한다. AI 서버를 호출하는 로직은 별도 컴포넌트가 담당하며, 이 문서와 현재 백엔드 구현 범위에는 AI HTTP 호출을 포함하지 않는다. 동선 계산 컴포넌트는 해당 여행에 대해 이미 받아온 장소 정확히 6개를 입력받는다.
+
+### 1. 동선 계산 경계
+
+#### 동선 계산 입력 계약
+
+```json
+{
+  "tripId": "1001",
+  "places": [
+    {
+      "placeId": "5001",
+      "name": "경주역",
+      "categoryGroup": "TOURISM_CULTURE",
+      "categoryName": "관광명소",
+      "address": "경상북도 경주시",
+      "roadAddress": "경상북도 경주시 태종로 685",
+      "longitude": 129.2175,
+      "latitude": 35.8443,
+      "selectionReason": "여행 시작 지점과 가깝고 다음 장소로 이동하기 편리해요."
+    }
+  ]
+}
+```
+
+- `places`는 중복되지 않은 장소를 정확히 6개 포함해야 한다.
+- 각 장소는 서비스 DB에 저장된 `placeId`, 좌표와 표시 정보를 가져야 한다.
+- `categoryGroup`은 `TOURISM_CULTURE`, `ACTIVITY`, `RESTAURANT`, `CAFE_DESSERT`, `SHOPPING`, `REST` 중 하나다.
+- AI 호출 담당 컴포넌트는 AI 응답을 위 입력으로 변환해 동선 계산 컴포넌트에 전달한다.
+- 동선 계산 컴포넌트는 AI 서버를 호출하거나 장소를 추가·삭제·대체하지 않는다.
+
+#### 최단 동선 계산 규칙
+
+- 일정은 여행 시작일에 해당하는 `Day 1` 하나만 생성한다.
+- 출발지로 돌아오지 않는 열린 경로이며, 장소 6개를 각각 정확히 한 번 방문한다.
+- 가능한 `6! = 720`개 방문 순서를 모두 비교해 조건을 만족하는 순서 중 총 직선거리가 가장 짧은 순서를 선택한다.
+- 두 좌표 사이 직선거리는 Haversine 공식으로 계산하고 미터 단위 정수로 반올림한다.
+- 전체 거리는 선택한 순서의 인접 장소 5개 구간 거리 합계다. 이동수단, 도로 경로와 예상 소요 시간은 계산하지 않는다.
+- `RESTAURANT`끼리 또는 `CAFE_DESSERT`끼리 2개 연속 배치하지 않는다.
+- `TOURISM_CULTURE` 또는 `ACTIVITY`가 같은 그룹으로 3개 이상 연속되지 않게 한다.
+- 최단 거리 합계가 같은 순서가 여러 개면 `placeId` 배열의 사전식 오름차순이 가장 앞선 순서를 선택해 결과를 결정적으로 만든다.
+- 카테고리 조건을 만족하는 순서가 하나도 없으면 임의로 제약을 깨지 않고 생성을 실패 처리한다.
+
+#### 저장 경계
+
+- AI 호출과 동선 계산은 사용자 요청 안에서 동기 방식으로 완료한다.
+- 외부 AI 호출 중에는 DB 트랜잭션을 열어 두지 않는다.
+- 장소 6개 수신과 검증이 끝난 후 동선을 계산하고, 계산된 일정·Day 1·방문 장소 6개·이동 구간 5개를 하나의 트랜잭션으로 저장한다.
+- 일부 데이터만 저장된 일정은 허용하지 않는다. 거리 계산이나 저장에 실패하면 일정 전체를 롤백한다.
+- 생성된 일정은 별도의 후보 선택 없이 해당 여행의 `ACTIVE`, `SHORTEST` 일정이 된다.
+- V1에서는 복수 후보, 사용자 재생성, 진행 상태 조회, 날씨 기반 재생성과 일정 실시간 수정 기능을 제공하지 않는다.
+
+### 2. V1 일정 동기 생성
+
+#### 기본 정보
+
+| 항목 | 내용 |
+| --- | --- |
+| 상태 | `APPROVED` |
+| Method | `POST` |
+| URL | `/api/trips/{tripId}/schedule` |
+| 설명 | AI 추천 장소 6개를 전달받아 최단 동선을 계산하고 완성된 하루 일정을 저장·반환한다. |
+| 인증 | Access Token 필수 |
+| 인가 | 해당 여행방의 현재 방장 |
+| 멱등성 | `Idempotency-Key` 필수 |
+
+사용자 요청 body는 사용하지 않는다. AI 호출 담당 컴포넌트가 생성 흐름 안에서 장소 6개를 동선 계산 컴포넌트에 전달한다.
+
+#### 성공 응답
+
+```json
+{
+  "code": "SCHEDULE_GENERATED",
+  "message": "여행 일정을 생성했습니다.",
+  "data": {
+    "tripId": "1001",
+    "scheduleId": "7001",
+    "strategy": "SHORTEST",
+    "status": "ACTIVE",
+    "totalDistanceMeters": 12100,
+    "createdAt": "2026-09-07T18:00:03.123456+09:00",
+    "days": [
+      {
+        "dayId": "7101",
+        "dayNumber": 1,
+        "date": "2026-09-12",
+        "totalDistanceMeters": 12100,
+        "stops": [
+          {
+            "stopId": "7201",
+            "placeId": "5001",
+            "order": 1,
+            "name": "경주역",
+            "categoryGroup": "TOURISM_CULTURE",
+            "categoryName": "관광명소",
+            "address": "경상북도 경주시",
+            "roadAddress": "경상북도 경주시 태종로 685",
+            "longitude": 129.2175,
+            "latitude": 35.8443,
+            "selectionReason": "여행 시작 지점과 가깝고 다음 장소로 이동하기 편리해요."
+          }
+        ],
+        "legs": [
+          {
+            "legId": "7301",
+            "fromStopId": "7201",
+            "toStopId": "7202",
+            "order": 1,
+            "distanceMeters": 950
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+실제 성공 응답은 Day 하나, 장소 6개와 이동 구간 5개를 순서대로 포함한다.
+
+| HTTP 상태 | API 코드 | 조건 |
+| ---: | --- | --- |
+| `201 Created` | `SCHEDULE_GENERATED` | 동선 계산과 일정 저장 완료 |
+| `400 Bad Request` | `INVALID_AI_PLACE_RESULT` | 전달된 장소가 6개가 아니거나 중복·필수값·좌표·카테고리가 유효하지 않음 |
+| `401 Unauthorized` | `AUTHENTICATION_REQUIRED` | Access Token이 없거나 유효하지 않음 |
+| `403 Forbidden` | `TRIP_HOST_REQUIRED` | 현재 방장이 아님 |
+| `404 Not Found` | `TRIP_NOT_FOUND` | 여행방이 없거나 소프트 삭제됨 |
+| `409 Conflict` | `SCHEDULE_GENERATION_NOT_READY` | 설문 마감 전이고 모든 활성 멤버가 제출하지 않음 |
+| `409 Conflict` | `SCHEDULE_ALREADY_EXISTS` | 해당 여행에 이미 `ACTIVE` 일정이 있음 |
+| `409 Conflict` | `SCHEDULE_ROUTE_NOT_FOUND` | 카테고리 조건을 만족하는 방문 순서가 없음 |
+| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 서울 날짜 기준 여행이 이미 시작됨 |
+| `409 Conflict` | `IDEMPOTENCY_KEY_REUSED` | 같은 Key를 다른 요청 내용에 사용함 |
+| `409 Conflict` | `IDEMPOTENCY_REQUEST_IN_PROGRESS` | 같은 Key의 요청이 아직 처리 중임 |
+| `502 Bad Gateway` | `AI_PLACE_RESULT_UNAVAILABLE` | AI 호출 담당 컴포넌트가 장소 결과를 제공하지 못함 |
+| `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
+
+#### 처리 규칙
+
+- 모든 활성 멤버가 설문을 제출했거나 `survey_deadline_at`이 지난 경우에만 생성할 수 있으며 제출 완료 설문이 최소 하나는 있어야 한다.
+- 일정 생성 전체는 동기 방식이다. 서버는 작업 접수용 `202 Accepted`, 작업 ID 또는 상태 조회 API를 반환하지 않는다.
+- 동일한 멱등성 Key의 완료 요청은 AI를 다시 호출하거나 일정을 중복 저장하지 않고 최초 성공 응답을 재현한다.
+- AI 연동의 URL, 인증, timeout과 재시도는 AI 호출 담당 컴포넌트의 별도 계약이며 동선 계산 컴포넌트의 책임이 아니다.
+- 성공한 응답을 받은 클라이언트는 추가 폴링이나 후보 확정 없이 응답의 일정 화면으로 이동할 수 있다.
+
+### 3. 생성 일정 조회
+
+#### 기본 정보
+
+| 항목 | 내용 |
+| --- | --- |
+| 상태 | `APPROVED` |
+| Method | `GET` |
+| URL | `/api/trips/{tripId}/schedule` |
+| 설명 | 여행방의 현재 V1 일정과 방문 순서·직선거리 정보를 조회한다. |
+| 인증 | Access Token 필수 |
+| 인가 | 해당 여행방의 활성 멤버 |
+| 멱등성 | 조회 API이므로 별도 Key 불필요 |
+
+#### 성공 응답
+
+```json
+{
+  "code": "ACTIVE_SCHEDULE_RETRIEVED",
+  "message": "확정 일정을 조회했습니다.",
+  "data": {
+    "tripId": "1001",
+    "scheduleId": "7001",
+    "strategy": "SHORTEST",
+    "status": "ACTIVE",
+    "editable": false,
+    "totalDistanceMeters": 12100,
+    "createdAt": "2026-09-07T18:00:03.123456+09:00",
+    "days": [
+      {
+        "dayId": "7101",
+        "dayNumber": 1,
+        "date": "2026-09-12",
+        "totalDistanceMeters": 12100,
+        "stops": [
+          {
+            "stopId": "7201",
+            "placeId": "5001",
+            "order": 1,
+            "name": "경주역",
+            "categoryGroup": "TOURISM_CULTURE",
+            "categoryName": "교통 > 기차역",
+            "address": "경상북도 경주시",
+            "roadAddress": "경상북도 경주시 태종로 685",
+            "longitude": 129.2175,
+            "latitude": 35.8443,
+            "selectionReason": "여행 시작 지점과 가깝고 다음 장소로 이동하기 편리해요."
+          },
+          {
+            "stopId": "7202",
+            "placeId": "5002",
+            "order": 2,
+            "name": "황리단길",
+            "categoryGroup": "TOURISM_CULTURE",
+            "categoryName": "관광명소",
+            "address": "경상북도 경주시 황남동",
+            "roadAddress": null,
+            "longitude": 129.2107,
+            "latitude": 35.8384,
+            "selectionReason": null
+          }
+        ],
+        "legs": [
+          {
+            "legId": "7301",
+            "fromStopId": "7201",
+            "toStopId": "7202",
+            "order": 1,
+            "distanceMeters": 950
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+| HTTP 상태 | API 코드 | 조건 |
+| ---: | --- | --- |
+| `200 OK` | `ACTIVE_SCHEDULE_RETRIEVED` | 현재 확정 일정 조회 성공 |
+| `401 Unauthorized` | `AUTHENTICATION_REQUIRED` | Access Token이 없거나 유효하지 않음 |
+| `403 Forbidden` | `TRIP_MEMBER_REQUIRED` | 해당 여행방의 활성 멤버가 아님 |
+| `404 Not Found` | `TRIP_NOT_FOUND` | 여행방이 없거나 소프트 삭제됨 |
+| `404 Not Found` | `ACTIVE_SCHEDULE_NOT_FOUND` | 아직 확정된 일정이 없음 |
+| `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
+
+#### 처리 규칙
+
+- 해당 여행방의 `ACTIVE` 일정 하나만 반환한다.
+- V1 응답은 Day 하나, 장소 6개와 이동 구간 5개를 포함하며 장소와 이동 구간은 `order` 오름차순으로 반환한다.
+- `selectionReason`은 AI 호출 담당 컴포넌트가 제공한 값을 저장해 반환한다.
+- 거리 합계는 현재 활성 `schedule_legs.distance_meters`의 합계다. 이동수단, 예상 소요 시간과 도로 경로 polyline은 제공하지 않는다.
+- 클라이언트는 각 장소의 좌표를 방문 순서대로 직선 연결해 지도의 동선을 표시한다.
+- V1 일정은 수정할 수 없으므로 `editable`은 항상 `false`다.
 
 ## 5. FastAPI 일정 생성 입력
 
@@ -303,16 +557,7 @@ Content-Type: application/json
           "score": 4
         }
       ],
-      "excludedCategoryCodes": ["SPICY_FOOD", "LONG_WALK"],
-      "mustVisitPlaces": [
-        {
-          "placeId": "5001",
-          "googlePlaceId": "ChIJ_PLANIT_EXAMPLE",
-          "name": "해운대 카페",
-          "longitude": 129.1585,
-          "latitude": 35.1587
-        }
-      ]
+      "excludedCategoryCodes": ["SPICY_FOOD", "LONG_WALK"]
     }
   ]
 }
@@ -323,10 +568,10 @@ Content-Type: application/json
 - Spring 서버가 제출 완료된 활성 멤버들의 설문을 기준으로 입력을 생성하며 클라이언트는 FastAPI를 직접 호출하지 않는다.
 - `surveyInputs`에는 제출 완료된 활성 멤버별 설문 입력을 포함한다. 사용자 식별정보 대신 내부 `surveyId`로 입력 단위를 구분한다.
 - `preferenceAnswers[].score`는 `survey_answers.score`의 `1~5` 원본 값을 가공하지 않고 전달한다.
-- `excludedCategoryCodes`에는 해당 설문에서 선택한 제외 카테고리 코드를, `mustVisitPlaces`에는 `survey_place_preferences`에 연결된 꼭 가고 싶은 장소를 포함한다.
-- 각 설문 입력은 작업 시작 시 `answers_snapshot`, `excluded_categories_snapshot`, `place_preferences_snapshot`에 고정한다.
+- `excludedCategoryCodes`에는 해당 설문에서 선택한 제외 카테고리 코드를 포함한다.
+- 각 설문 입력은 작업 시작 시 `answers_snapshot`과 `excluded_categories_snapshot`에 고정한다.
 - AI 생성 중 설문이 재제출돼도 현재 작업의 입력 payload와 결과는 변경하지 않는다.
-- Spring 서버는 장소를 추천하거나 제외 카테고리와 꼭 가고 싶은 장소의 우선순위를 판단하지 않는다.
+- Spring 서버는 장소를 추천하지 않고 저장된 설문 점수와 제외 카테고리를 전달한다.
 - FastAPI가 장소 추천, 포함·제외 판단, 일정·경로 구성과 포함하지 못한 장소의 사유 생성을 전담한다.
 - FastAPI는 이동수단과 소요 시간을 고려하지 않고 장소 좌표 간 거리를 기준으로 전체 이동거리가 짧은 방문 순서를 계산한다.
 - AI 생성 일정에서는 음식점끼리 또는 카페끼리 연속 배치하지 않으며, `음식점 → 카페 → 음식점`과 `카페 → 음식점 → 카페` 순서도 만들지 않는다.
@@ -1007,7 +1252,6 @@ Location: /api/schedule-generation-jobs/4010
 - 여행 시작 시각 이후에는 새로운 결정과 재시도를 거부한다. 시작 전에 접수된 작업은 취소하지 않되 결과 적용 트랜잭션 직전에 여행 시작 여부를 다시 검사한다.
 - 검사 시점에 여행이 시작됐다면 새 일정과 하위 데이터를 저장하거나 활성화하지 않고 작업을 `FAILED`, 내부 `error_code=WEATHER_REPLAN_EXPIRED`로 종료한다. 이 내부 오류 코드는 사용자 응답에 노출하지 않으며 기존 `ACTIVE` 일정을 유지한다.
 - 아무 결정도 하지 않은 채 여행이 시작되면 시스템이 `decided_by_member_id=NULL`인 `KEEP` 결정을 기록한다.
-
 ## 15. 지역 장소 검색
 
 ### 기본 정보
@@ -1127,7 +1371,7 @@ Authorization: Bearer {accessToken}
 ### 처리 규칙
 
 - 이 API는 Google Places API를 다시 호출하지 않고 현재 `places` 행의 값을 반환한다.
-- 장소가 설문 선호 장소인지 실제 일정 장소인지는 이 응답에서 구분하지 않는다. 해당 역할은 `survey_place_preferences`, `schedule_stops` 연결 관계가 결정한다.
+- 장소가 일정에 포함됐는지는 `schedule_stops` 연결 관계로 판단한다.
 - nullable 값은 빈 문자열 대신 `null`로 반환하고 BIGINT ID는 JSON 10진수 문자열로 반환한다.
 
 ## 17. 설문 현황·그룹 취향 집계 조회
@@ -1186,5 +1430,5 @@ Authorization: Bearer {accessToken}
 - `categoryAverages`는 제출 완료된 활성 멤버의 최신 `survey_answers.score`만 카테고리별로 산술 평균하고 소수 첫째 자리로 반올림한다.
 - 평균값은 `1.0~5.0` 범위이며 0~100 점수로 정규화하지 않는다.
 - 제출 완료 설문이 없으면 `submittedCount=0`, `progressPercent=0`, `categoryAverages=[]`를 반환한다.
-- 개인별 점수, 제외 카테고리와 꼭 가고 싶은 장소는 그룹 집계 응답에 노출하지 않는다.
+- 개인별 점수와 제외 카테고리는 그룹 집계 응답에 노출하지 않는다.
 - 문항·카테고리 표시 순서는 보류 중이므로 `categoryAverages` 배열의 표시 순서 계약도 아직 확정하지 않는다.
