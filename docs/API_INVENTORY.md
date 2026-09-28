@@ -54,7 +54,7 @@
 
 | API | Method | URL | 목적 | 인증·인가 | 상태 |
 | --- | --- | --- | --- | --- | --- |
-| 서비스 지역 목록 | `GET` | `/api/regions` | 사전 등록된 광역·하위 지역 선택지 조회 | Access Token | `APPROVED` |
+| 서비스 지역 목록 | `GET` | `/api/regions` | 사전 등록된 단일 여행 지역 5개 조회 | Access Token | `IMPLEMENTED` |
 | 내 여행 목록 | `GET` | `/api/trips` | 참여 중·예정·지난 여행을 cursor로 10개씩 조회 | Access Token | `APPROVED` |
 | 여행방 생성 | `POST` | `/api/trips` | 기존 여행과 겹치지 않는 여행 정보 저장 및 생성자를 방장으로 등록 | Access Token | `APPROVED` |
 | 여행방 상세 조회 | `GET` | `/api/trips/{tripId}` | 여행 정보, 활성 멤버와 설문 진행률 조회 | 여행 멤버 | `APPROVED` |
@@ -63,7 +63,7 @@
 | 초대 참여 | `POST` | `/api/invitations/{invitationToken}/join` | 정원·설문·여행 기간 중복 확인 후 멤버십 생성 | Access Token | `APPROVED` |
 | 여행방 나가기 | `DELETE` | `/api/trips/{tripId}/members/me` | 여행 시작 전에 현재 멤버의 참여 종료 | 여행 멤버 | `APPROVED` |
 
-서비스 지원 광역 지역은 운영 전에 `broad_regions`, 하위 지역은 `sub_regions` 테이블에 미리 등록한다. `sub_regions.broad_region_id`는 소속 광역 지역의 `broad_regions.id`를 참조한다. `regionId`는 광역 코드나 하위 지역 코드가 아니라 최종 선택한 하위 지역의 PK인 `sub_regions.id`다. 목록 응답은 두 테이블을 조인해 광역 지역별로 그룹화하지만 여행방 생성 요청은 최종 선택한 `regionId` 하나만 전달한다. 세종특별자치시는 `broad_regions`의 광역 행과 `sub_regions`의 `세종시 전체` 하위 행으로 관리한다. 기준정보가 비어 있으면 빈 배열을 정상 응답하지 않고 `503 REGION_CATALOG_UNAVAILABLE`을 반환한다. 여행방 생성 요청에서 지역을 누락하면 `400 INVALID_REQUEST`, 존재하지 않는 ID이면 `404 REGION_NOT_FOUND`를 반환한다.
+서비스 지원 지역은 단일 `regions` 테이블에 서울, 경주, 부산, 전주, 제주 다섯 건으로 등록한다. `regionId`는 지역 코드가 아니라 `regions.id` PK이며, 목록 API는 ID 오름차순의 평면 목록으로 코드·이름·대표 좌표를 반환한다. 기준정보가 비어 있으면 빈 배열을 정상 응답하지 않고 `503 REGION_CATALOG_UNAVAILABLE`을 반환한다. 여행방 생성 요청에서 지역을 누락하면 `400 INVALID_REQUEST`, 존재하지 않는 ID이면 현재 구현의 공통 `404 RESOURCE_NOT_FOUND`를 반환한다.
 
 멤버 내보내기와 방장의 직접 여행방 삭제 기능은 제공하지 않는다. 여행방 나가기는 서울 날짜 기준 여행 시작 전까지만 허용한다. 생성 직후 방장만 있는 여행방은 방장이 남아 있는 동안 초대를 위해 유지하지만, 마지막 방장이 나가면 소유자 없는 방을 남기지 않고 소프트 삭제한다. 여행 시작 전에 활성 멤버가 한 번이라도 2명 이상이 된 여행방이 나가기·회원 탈퇴로 1명만 남으면 여행방을 소프트 삭제한다. 이때 남은 멤버십도 같은 시각에 `left_at`을 기록하고 비활성화하며, 멤버십 이력은 물리 삭제하지 않는다. 활성 멤버가 2명 이상 남은 상태에서 방장이 나가거나 탈퇴하면 `joined_at`이 가장 빠른 활성 멤버에게 방장 역할을 이전한다. 회원 탈퇴 자체는 여행 중·후에도 허용하지만 이로 인한 인원 감소로 진행 중·종료 여행방을 자동 삭제하지 않는다. 여행 시작 전 여행방이 자동 삭제되면 일정과 하위 Day·장소·이동 구간을 애플리케이션에서 함께 정리한다. 진행 중인 AI 생성 작업은 취소하지 않으며, 완료되더라도 결과를 삭제된 여행방에 반영하지 않는다. 포토 미션 사진은 여행 시작 전 제출할 수 없으므로 이 연쇄 정리 대상에 포함되지 않는다.
 
@@ -96,7 +96,7 @@
 | API | Method | URL | 목적 | 인증·인가 | 상태 |
 | --- | --- | --- | --- | --- | --- |
 | 취향 문항 목록 | `GET` | `/api/preference-questions` | 고정 5점 문항과 일정 제외 카테고리 조회 | Access Token | `IMPLEMENTED` |
-| 지역 장소 검색 | `GET` | `/api/regions/{regionId}/places` | 선택 지역의 광역 지역명을 검색어에 결합해 Google Places 장소를 cursor로 10개씩 검색 | Access Token | `APPROVED` |
+| 지역 장소 검색 | `GET` | `/api/regions/{regionId}/places` | 선택한 단일 지역명을 검색어에 결합해 Google Places 장소를 cursor로 10개씩 검색 | Access Token | `APPROVED` |
 | 선택 장소 저장 | `POST` | `/api/regions/{regionId}/places` | 사용자가 클릭한 Google Places 장소 하나만 저장하고 내부 장소 ID 반환 | Access Token | `APPROVED` |
 | 장소 상세 조회 | `GET` | `/api/places/{placeId}` | 주소·좌표·카테고리·연락처 조회 | Access Token | `APPROVED` |
 | 내 설문 조회 | `GET` | `/api/trips/{tripId}/survey` | 기존 답변과 제외 카테고리 조회 | 여행 멤버 본인 | `IMPLEMENTED` |
@@ -116,7 +116,7 @@
 
 V1 일정 생성은 사용자 요청 안에서 AI 장소 추천, 백엔드 최단 동선 계산과 저장을 완료한 뒤 완성된 일정을 반환하는 동기 방식이다. 작업 접수용 `202 Accepted`, 생성 상태 조회, 후보 일정 선택, 다일 일정, 일정 수정과 날씨 기반 재생성은 V1에서 제공하지 않는다.
 
-장소 검색 시 클라이언트는 사용자가 입력한 검색어만 전달한다. 서버는 `regionId`로 `sub_regions`를 조회하고 `sub_regions.broad_region_id = broad_regions.id`로 조인해 얻은 `broad_regions.broad_region_name`을 검색어 앞에 공백으로 결합해 Google Places API를 호출한다. 예를 들어 사용자가 `카페`를 입력하고 광역 지역명이 `부산광역시`이면 실제 외부 API 질의어는 `부산광역시 카페`다. 추가된 지역명은 검색창과 응답에 노출하지 않는다. 좌표나 행정구역 코드로 결과를 사후 제외하지 않으므로 이 정책은 특정 행정구역 포함을 보장하는 하드 필터가 아니라 지역 관련도를 높이는 검색 방식이다. 선택한 장소를 저장할 때 `places.region_id`에는 실제 행정구역 판정값이 아니라 검색에 사용한 하위 여행 지역의 `sub_regions.id`를 기록한다.
+장소 검색 시 클라이언트는 사용자가 입력한 검색어만 전달한다. 서버는 `regionId`로 `regions`를 조회해 얻은 `region_name`을 검색어 앞에 공백으로 결합해 Google Places API를 호출한다. 예를 들어 사용자가 `카페`를 입력하고 선택 지역명이 `부산`이면 실제 외부 API 질의어는 `부산 카페`다. 추가된 지역명은 검색창과 응답에 노출하지 않는다. 좌표나 행정구역 코드로 결과를 사후 제외하지 않으므로 이 정책은 특정 행정구역 포함을 보장하는 하드 필터가 아니라 지역 관련도를 높이는 검색 방식이다. 선택한 장소를 저장할 때 `places.region_id`에는 검색에 사용한 `regions.id`를 기록한다.
 
 모든 취향 문항은 화면 진입 시 중립값 `3`으로 선택된 상태다. 설문 제출 시 각 문항의 최종 선택값 `1~5`를 빠짐없이 전달하고, 서버는 별도 가중치·정규화 없이 `survey_answers.score`에 그대로 저장한다. 그룹 결과도 0~100%로 환산하지 않고 제출 완료된 활성 멤버의 원본 점수를 카테고리별로 산술 평균해 `1.0~5.0` 범위, 소수 첫째 자리로 제공한다.
 
@@ -131,6 +131,8 @@ Google Places 검색 결과 전체를 `places`에 저장하지 않는다. 사용
 일정 제외 항목은 장소가 아니라 사전 등록된 카테고리이며 여러 개를 선택할 수 있다. AI 호출 담당 컴포넌트는 제출된 설문을 사용해 장소를 추천하고, 백엔드 동선 계산 컴포넌트에는 해당 여행에 대해 이미 받아온 장소를 정확히 6개 전달한다. AI HTTP 호출 구현은 동선 계산 컴포넌트의 책임이 아니다.
 
 백엔드는 장소 6개의 `6! = 720`개 순서를 모두 비교한다. Haversine 직선거리 합계가 가장 짧고 카테고리 연속 배치 조건을 만족하는 열린 경로를 선택해 Day 1 하나, 방문 장소 6개와 이동 구간 5개를 저장한다. 생성 성공 즉시 `ACTIVE`, `SHORTEST` 일정으로 제공하며 이동수단, 도로 경로와 예상 소요 시간은 제공하지 않는다.
+
+V1 경로 계산용 `categoryGroup`은 AI 응답에서 전달받아 메모리에서만 사용한다. 별도 컬럼에 저장하거나 사용자 일정 응답에 노출하지 않으며, 화면 표시에는 기존 `places.category_name`을 사용한다.
 
 ### V2·V3 확장 정책 보존
 

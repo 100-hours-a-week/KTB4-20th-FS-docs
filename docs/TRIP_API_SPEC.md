@@ -8,12 +8,10 @@
 
 ## 2. 공통 여행 지역 규칙
 
-- 서비스에서 지원하는 광역 여행 지역은 `broad_regions`, 하위 여행 지역은 `sub_regions` 테이블에 운영 전에 기준정보로 미리 등록한다.
-- `sub_regions.broad_region_id`는 소속 광역 지역의 `broad_regions.id`를 참조한다.
-- API의 `regionId`는 최종 선택한 하위 지역의 PK인 `sub_regions.id`이며 광역 지역은 해당 행의 `broad_region_id`로 조회한다.
-- `broad_regions.broad_region_code`, `broad_regions.broad_region_name`, `sub_regions.sub_region_code`, `sub_regions.sub_region_name`은 모두 필수 기준정보이며 기본값을 사용하지 않는다.
-- 세종특별자치시는 `broad_regions`에 광역 지역을 등록하고, `sub_regions`에 화면에서 최종 선택할 `세종시 전체` 하위 지역을 별도 등록한다.
-- `regionId`는 광역 지역 코드나 하위 지역 코드 자체가 아니다.
+- 서비스에서 지원하는 여행 지역은 단일 `regions` 테이블에 운영 전 기준정보로 등록한다.
+- 지원 지역은 서울, 경주, 부산, 전주, 제주 다섯 곳이다.
+- `regions.region_code`, `regions.region_name`, `regions.latitude`, `regions.longitude`는 모두 필수 기준정보다.
+- API의 `regionId`는 `regions.id` PK이며 서비스 지역 코드 자체가 아니다.
 - 여행방 생성 요청에서는 최종 선택한 `regionId` 하나만 전달한다.
 - `regionId` 누락은 `400 INVALID_REQUEST`, 존재하지 않는 값은 `404 REGION_NOT_FOUND`로 처리한다.
 
@@ -59,15 +57,11 @@ Authorization: Bearer {accessToken}
   "data": {
     "regions": [
       {
-        "broadRegionCode": "11",
-        "broadRegionName": "서울특별시",
-        "subRegions": [
-          {
-            "regionId": "1",
-            "subRegionCode": "11680",
-            "subRegionName": "강남구"
-          }
-        ]
+        "regionId": "1",
+        "regionCode": "REGION-SEOUL",
+        "regionName": "서울",
+        "latitude": 37.566500,
+        "longitude": 126.978000
       }
     ]
   }
@@ -83,8 +77,8 @@ Authorization: Bearer {accessToken}
 
 ### 처리 규칙
 
-- 서버는 `broad_regions`와 `sub_regions`를 `sub_regions.broad_region_id = broad_regions.id`로 조인하고, 각 광역 지역의 하위 지역을 `subRegions`로 반환한다.
-- `regionId`는 `sub_regions.id` BIGINT PK이므로 JSON에서 10진수 문자열로 반환한다.
+- 서버는 `regions.id` 오름차순으로 전체 지역을 평면 목록으로 반환한다.
+- `regionId`는 `regions.id` BIGINT PK이므로 JSON에서 10진수 문자열로 반환한다.
 - 지역 기준정보는 여행방 생성에 필수이므로 `regions: []`를 정상 응답으로 반환하지 않는다.
 - 지역 기준정보를 조회할 수 없으면 클라이언트는 다음 단계로 진행시키지 않고 오류 화면과 재시도를 제공한다.
 
@@ -114,7 +108,7 @@ Content-Type: application/json
 ```json
 {
   "name": "부산 맛집 여행",
-  "regionId": "123",
+  "regionId": "3",
   "startDate": "2026-09-12",
   "endDate": "2026-09-14",
   "capacity": 4,
@@ -126,7 +120,7 @@ Content-Type: application/json
 | --- | --- | --- | --- | --- | --- |
 | Header | `Idempotency-Key` | string(UUIDv7) | Y | 같은 사용자 동작의 재시도에는 같은 값 사용 | 중복 여행방 생성 방지 |
 | Body | `name` | string | Y | 앞뒤 공백 제거 후 1~12자 | 여행방 이름 |
-| Body | `regionId` | string | Y | `sub_regions.id`의 10진수 문자열 | 선택한 하위 여행 지역 |
+| Body | `regionId` | string | Y | `regions.id`의 10진수 문자열 | 선택한 여행 지역 |
 | Body | `startDate` | string(date) | Y | 서울 날짜 기준 최소 내일 | 여행 시작일 |
 | Body | `endDate` | string(date) | Y | 시작일 이상, 포함 최대 10일 | 여행 종료일 |
 | Body | `capacity` | integer | N | 기본값 4, 2~8 | 방장을 포함한 정원 |
@@ -150,11 +144,9 @@ Content-Type: application/json
     "tripId": "1001",
     "name": "부산 맛집 여행",
     "region": {
-      "regionId": "123",
-      "broadRegionCode": "26",
-      "broadRegionName": "부산광역시",
-      "subRegionCode": "26350",
-      "subRegionName": "해운대구"
+      "regionId": "3",
+      "regionCode": "REGION-BUSAN",
+      "regionName": "부산"
     },
     "startDate": "2026-09-12",
     "endDate": "2026-09-14",
@@ -226,9 +218,8 @@ Authorization: Bearer {accessToken}
         "tripId": "1001",
         "name": "부산 맛집 여행",
         "region": {
-          "regionId": "123",
-          "broadRegionName": "부산광역시",
-          "subRegionName": "해운대구"
+          "regionId": "3",
+          "regionName": "부산"
         },
         "startDate": "2026-09-12",
         "endDate": "2026-09-14",
@@ -356,9 +347,8 @@ Authorization: Bearer {accessToken}
       "tripId": "1001",
       "name": "부산 맛집 여행",
       "region": {
-        "regionId": "123",
-        "broadRegionName": "부산광역시",
-        "subRegionName": "해운대구"
+        "regionId": "3",
+        "regionName": "부산"
       },
       "startDate": "2026-09-12",
       "endDate": "2026-09-14",
@@ -488,9 +478,9 @@ Content-Type: application/json
     "tripId": "1001",
     "name": "부산 맛집 여행",
     "region": {
-      "regionId": "123",
-      "broadRegionName": "부산광역시",
-      "subRegionName": "해운대구"
+      "regionId": "3",
+      "regionCode": "REGION-BUSAN",
+      "regionName": "부산"
     },
     "startDate": "2026-09-12",
     "endDate": "2026-09-14",
