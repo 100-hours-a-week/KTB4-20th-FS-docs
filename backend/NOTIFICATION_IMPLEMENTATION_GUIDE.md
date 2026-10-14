@@ -8,6 +8,31 @@
 - 비즈니스 규칙은 [`FIGMA_FINAL_BUSINESS_RULES.md`](../FIGMA_FINAL_BUSINESS_RULES.md)의 `BR-NOTI`를 기준으로 한다.
 - 이 문서의 내용은 구현 예정 계약이며 코드·마이그레이션·통합 테스트가 확인되기 전까지 `IMPLEMENTED` 또는 `VERIFIED`가 아니다.
 
+### 1.1 이슈별 구현 현황
+
+- 상위 이슈: [#181 여행 D-1 알림 기능 구현](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/181)
+- 상태 기준
+  - `NOT_STARTED`: 코드 구현을 시작하지 않음
+  - `PARTIAL`: 이슈 범위 중 일부만 구현됨
+  - `IMPLEMENTED`: 코드 구현은 완료됐지만 이슈 완료 조건 전체가 검증되지 않음
+  - `VERIFIED`: 관련 코드와 명시된 테스트가 현재 체크아웃에서 통과함
+- 다음 세션은 아래 표의 `다음 시작점`을 확인하고 해당 이슈 범위만 구현한다.
+
+| 순서 | 이슈 | 상태 | 담당 문서 범위 | 현재 구현과 다음 시작점 |
+| ---: | --- | --- | --- | --- |
+| 1 | [#182 알림 도메인 모델 및 DB 스키마](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/182) | `IMPLEMENTED` | 2절, 3절 | Entity·Repository·V30·평문 `dedupe_key`·UNIQUE Upsert·동시성 테스트 구현. 기존 `read_at`, `delivered_at`, `deleted_at`이 값이 있는 상태에서도 Upsert 후 보존되는지 통합 테스트를 보강하면 `VERIFIED`로 전환 가능 |
+| 2 | [#184 AI 날씨 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `NOT_STARTED` | 4절, 5.1절 | **다음 백엔드 구현 시작점.** AI Client·응답 DTO와 Redis JSON `NX`·TTL Lua Script부터 구현 |
+| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `NOT_STARTED` | 5절, 6절 | #184 완료 후 동일 상태 머신을 호출하는 10:00·10:30 스케줄과 ShedLock 구현 |
+| 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `PARTIAL` | 3절, 6절 | #182의 단건 UNIQUE Upsert 기반은 구현됨. 대상 여행·사용자 조회, 유형별 내용 생성, 일괄 저장과 `NOTI_GENERATED` 전이는 미구현 |
+| 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `NOT_STARTED` | 6절, 7.1절 | `planit:notifications` Publisher·Subscriber와 Publish 후 `DONE` 전이 구현 |
+| 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `NOT_STARTED` | 7.2절 | `/user/queue/notifications` 인증·구독·사용자별 라우팅 구현 |
+| 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `NOT_STARTED` | API 명세 2~5절 | 목록 Cursor·미읽음 수·개별/전체 읽음 API 구현 |
+| 8 | [#189 알림 ACK 및 미전달 알림 복구 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/189) | `PARTIAL` | 7.3절, 8절 | 소유권·미삭제 조건의 멱등 `delivered_at` DB 처리는 구현·검증됨. pending 조회, Service·Controller·응답/오류 코드와 경합 테스트는 미구현 |
+| 9 | [#192 알림 소프트 삭제 및 운영 모니터링](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/192) | `NOT_STARTED` | API 명세 9절, 가이드 11절 | 90일 소프트 삭제와 로그·메트릭 구현 |
+| 10 | [#193 알림 생성·전송·복구 통합 테스트](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/193) | `PARTIAL` | 10절 전체 | #182 Upsert 동시성과 #189 ACK 영속성은 검증됨. 전체 Precheck→생성→전송→복구 시나리오는 미구현 |
+
+프론트엔드는 [#190 전역 알림 연결 및 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/190), [#191 알림 목록·배지·이상 기후 팝업 UI](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/191)에서 별도로 진행한다.
+
 ## 2. 책임 분리
 
 | 구성요소 | 책임 |
@@ -230,24 +255,27 @@ public void executeWeatherNotificationWorkflow() {
 4. 조회된 알림을 화면에 반영한 후 개별 ACK를 호출한다.
 5. 실시간 이벤트와 HTTP 복구 응답이 겹치면 `notificationId`로 병합한다.
 
-## 9. 권장 구현 순서
+## 9. 이슈 기준 구현 순서
 
-1. Flyway로 `delivered_at`과 UNIQUE `dedupe_key` 추가
-2. Notification Entity·Repository·Upsert와 ACK 수정 쿼리 구현
-3. Redis JSON 저장·상태 전이·TTL Lua Script 구현
-4. ShedLock과 두 번의 스케줄 트리거가 같은 상태 머신을 호출하도록 구현
-5. 알림 생성 Upsert와 Redis Pub/Sub publisher·subscriber 구현
-6. 사용자 WebSocket destination과 인증·라우팅 구현
-7. pending-deliveries·delivery-ack HTTP API 구현
-8. 프론트엔드 전역 WebSocket 연결·Store·localStorage 중복 방지·ACK 구현
+1. `#182` Flyway·Notification Entity·Repository·UNIQUE Upsert
+2. `#184` AI `/precheck`·Redis JSON·상태 전이·TTL Lua Script
+3. `#185` ShedLock과 10:00·10:30 스케줄 트리거·장애 복구 분기
+4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이
+5. `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이
+6. `#188` 사용자 WebSocket destination·인증·라우팅
+7. `#187` 알림 목록·미읽음·읽음 처리 API
+8. `#189` pending-deliveries·delivery-ack HTTP API
+9. `#192` 90일 소프트 삭제·운영 로그·메트릭
+10. `#193` 전체 생성·전송·복구 통합 테스트
+11. `#190`, `#191` 프론트엔드 전역 연결·상태 관리·UI
 
 ## 10. 검증 체크리스트
 
 ### DB와 HTTP
 
-- [ ] 동일 `dedupe_key`로 동시 생성해도 알림 행이 하나만 남는다.
+- [x] 동일 `dedupe_key`로 동시 생성해도 알림 행이 하나만 남는다. (`#182` 통합 테스트 완료)
 - [ ] Upsert 재실행이 기존 `read_at`, `delivered_at`, `created_at`을 변경하지 않는다.
-- [ ] ACK는 최초와 반복 요청 모두 성공하고 최초 `delivered_at`을 유지한다.
+- [x] ACK DB 처리는 최초와 반복 요청 모두 최초 `delivered_at`을 유지한다. (`#189` 영속성 테스트 완료, HTTP API 미구현)
 - [ ] 다른 사용자의 ACK는 `404 NOTIFICATION_NOT_FOUND`다.
 - [ ] pending-deliveries는 서울 기준 당일·미전달·미삭제·대상 알림 유형만 반환한다.
 
