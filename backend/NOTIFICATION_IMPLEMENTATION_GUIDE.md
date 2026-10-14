@@ -1,0 +1,278 @@
+# PlanIt 알림 기능 구현 가이드
+
+## 1. 문서 목적과 상태
+
+이 문서는 D-1 일반 알림과 이상 기후 알림을 다중 인스턴스 환경에서 생성·전달·복구하기 위한 구현 순서와 검증 기준을 정리한다.
+
+- HTTP·WebSocket 계약은 [`NOTIFICATION_API_SPEC.md`](../docs/NOTIFICATION_API_SPEC.md)를 기준으로 한다.
+- 비즈니스 규칙은 [`FIGMA_FINAL_BUSINESS_RULES.md`](../FIGMA_FINAL_BUSINESS_RULES.md)의 `BR-NOTI`를 기준으로 한다.
+- 이 문서의 내용은 구현 예정 계약이며 코드·마이그레이션·통합 테스트가 확인되기 전까지 `IMPLEMENTED` 또는 `VERIFIED`가 아니다.
+
+## 2. 책임 분리
+
+| 구성요소 | 책임 |
+| --- | --- |
+| ShedLock | 동일한 스케줄 작업의 동시 실행 방지 |
+| Redis JSON | AI precheck 결과와 작업 진행 상태를 20시간 보관 |
+| `notifications` | 알림 원본, 읽음·전달·소프트 삭제 상태 보관 |
+| UNIQUE `dedupe_key` | 스케줄 재실행 시 중복 알림 행 생성 방지 |
+| Redis Pub/Sub | 알림 이벤트를 모든 애플리케이션 인스턴스로 실시간 전파 |
+| WebSocket | 이벤트 수신 인스턴스에 연결된 사용자에게 실시간 전달 |
+| ACK API | 클라이언트 화면 반영 후 `delivered_at` 멱등 기록 |
+| pending-deliveries API | 미접속·재연결 사용자의 당일 미전달 알림 복구 |
+
+## 3. DB 변경 요구사항
+
+`notifications`에 다음 변경이 필요하다.
+
+```sql
+ALTER TABLE notifications
+    ADD COLUMN delivered_at DATETIME(6) NULL,
+    ADD CONSTRAINT uk_notifications_dedupe UNIQUE (dedupe_key);
+```
+
+- 실제 마이그레이션은 신규 Flyway 버전으로 추가하고 기존 마이그레이션을 수정하지 않는다.
+- `dedupe_key`는 `{notificationType}:{tripId}:{userPublicId}:{startDate}` 순서로 생성한다.
+- Upsert는 기존 행의 `read_at`, `delivered_at`, `created_at`, `deleted_at`을 초기화하지 않는다.
+- 다른 사용자의 알림을 본인 알림처럼 처리하지 못하도록 모든 수정 쿼리에 `user_id`를 포함한다.
+
+## 4. Redis JSON 작업 상태
+
+### 4.1 키와 TTL
+
+```text
+planit:weather:precheck:{targetDate}
+```
+
+- `targetDate`는 `yyyy-MM-dd`형식의 여행 시작 대상일이다.
+- TTL은 20시간(`72,000초`)이다.
+- 최초 JSON 생성은 `JSON.SET key $ value NX`로 기존 작업을 덮어쓰지 않는다.
+- JSON 생성과 `EXPIRE`는 Lua Script로 원자적으로 실행한다.
+- 상태 경로는 `JSON.SET key $.status value XX`로 변경하되, 상태 필드가 없으면 작업을 성공으로 간주하지 않는다.
+
+### 4.2 최초 생성 Lua Script 계약
+
+Lua Script는 `JSON.SET key $ value NX`와 `EXPIRE`를 하나의 원자적 작업으로 수행한다.
+
+```lua
+local result = redis.call(
+    'JSON.SET',
+    KEYS[1],
+    '$',
+    ARGV[1],
+    'NX'
+)
+
+if not result then
+    return 'ALREADY_EXISTS'
+end
+
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+
+return 'CREATED'
+```
+
+| 반환 결과 | 의미 | 처리 규칙 |
+| --- | --- | --- |
+| `CREATED` | JSON 생성과 TTL 설정 완료 | `PRECHECKED` 상태의 후속 알림 생성 단계로 진행 |
+| `ALREADY_EXISTS` | 동일 키가 이미 존재해 `NX` 조건 불충족 | 정상적인 중복 실행으로 간주하고 기존 JSON의 `status`에 따라 재개 |
+| Redis 오류 | 연결 실패, 타임아웃, 잘못된 JSON 또는 Script 실행 오류 | 작업 실패로 처리하고 다음 단계로 진행하지 않음 |
+
+- `ALREADY_EXISTS`는 예외나 오류 로그 대상이 아니다.
+- Redis 오류는 애플리케이션 예외로 전파하고 로그와 메트릭을 남긴다.
+- `ALREADY_EXISTS`일 때 기존 데이터의 TTL을 20시간으로 다시 연장하지 않는다.
+- 기존 키의 TTL이 없거나 비정상적인 값이면 운영 로그와 메트릭을 남기되, 기존 JSON을 덮어쓰지 않는다.
+
+### 4.3 상태 정의
+
+| 상태 | 완료 조건 | 다음 실행 |
+| --- | --- | --- |
+| 키 없음 | AI `/precheck` 미실행 또는 실패 | AI `/precheck` 1회 호출 |
+| `PRECHECKED` | AI 응답과 결과 JSON 저장 완료 | 알림 대상 산출과 DB 저장 |
+| `NOTI_GENERATED` | 모든 대상 알림 DB 커밋 완료 | 미전달 알림 Redis Pub/Sub 발행 |
+| `DONE` | 현재 작업의 Pub/Sub 발행 시도 완료 | 작업 종료 |
+
+`DONE`은 사용자 수신 완료가 아니라 실시간 발행 시도 완료다. 개별 사용자 수신 여부는 `delivered_at`으로 판단한다.
+
+## 5. ShedLock과 장애 복구
+
+- 첫 실행은 매일 `10:00`, 장애 복구용 두 번째 실행은 매일 `10:30`에 `Asia/Seoul` 기준으로 예약한다.
+- 두 실행은 동일한 상태 머신 메서드와 ShedLock 이름 `weatherNotificationWorkflow`를 사용한다.
+- 초기 값은 `lockAtMostFor=PT5M`, `lockAtLeastFor=PT1M`으로 설정한다.
+- AI `/precheck`는 스케줄 실행당 1회만 호출하고 `@Retryable`을 사용하지 않는다.
+- AI 호출이 실패하면 Redis JSON을 생성하지 않고 예외·로그·메트릭을 남긴다.
+- 두 번째 실행도 실패하면 최종 장애로 기록하고 운영 감지 대상으로 삼는다.
+- 실행 시간이 `lockAtMostFor`를 초과하지 않는지 메트릭으로 검증한 후 필요하면 값을 늘린다.
+
+```java
+@Scheduled(cron = "0 0 10 * * *", zone = "Asia/Seoul")
+@Scheduled(cron = "0 30 10 * * *", zone = "Asia/Seoul")
+@SchedulerLock(
+        name = "weatherNotificationWorkflow",
+        lockAtMostFor = "PT5M",
+        lockAtLeastFor = "PT1M"
+)
+public void executeWeatherNotificationWorkflow() {
+    LockAssert.assertLocked();
+    // Redis 상태에 맞는 단계 실행
+}
+```
+
+### 5.1 AI `/precheck` 계약
+
+- 요청은 `GET ${AI_BASE_URL}/precheck`다.
+- request body와 query parameter는 사용하지 않는다.
+- `X-Internal-Token: ${AI_INTERNAL_API_KEY}` 헤더만 추가한다.
+- 스케줄 실행당 한 번만 요청하며 `@Retryable`은 사용하지 않는다.
+- HTTP 200이 아니거나, body가 없거나, 아래 응답 구조로 역직렬화할 수 없으면 해당 실행을 실패 처리하고 Redis JSON을 생성하지 않는다.
+
+이상 상황이 있는 경우:
+
+```json
+{
+  "status_code": 200,
+  "data": {
+    "has_issue": true,
+    "affected_place_ids": [
+      "place_123",
+      "place_456"
+    ],
+    "reasons": [
+      {
+        "category": "weather_risk",
+        "detail": "heavy_rain"
+      },
+      {
+        "category": "closure_risk",
+        "detail": "temporary_closure"
+      }
+    ]
+  }
+}
+```
+
+이상 상황이 없는 경우:
+
+```json
+{
+  "status_code": 200,
+  "data": {
+    "has_issue": false,
+    "affected_place_ids": [],
+    "reasons": []
+  }
+}
+```
+
+- `has_issue=false`도 정상 완료 결과이며 빈 배열을 포함한 응답 전체를 Redis에 저장한다.
+- `has_issue=true`이면 `affected_place_ids`와 일정 방문 장소를 비교해 영향받는 여행과 수신자를 결정한다.
+- `status_code`는 응답 body 필드이고 실제 HTTP status도 별도로 200인지 검증한다.
+
+## 6. 스케줄 상태 머신
+
+```text
+작업 시작
+  ├─ Redis 키 없음 → AI precheck → PRECHECKED
+  ├─ PRECHECKED → 알림 DB Upsert → NOTI_GENERATED
+  ├─ NOTI_GENERATED → Redis Pub/Sub Publish → DONE
+  └─ DONE → 종료
+```
+
+각 상태 전이는 선행 단계가 완료된 후에만 수행한다.
+
+1. AI 응답을 받은 후 Redis JSON 생성이 완료되면 `PRECHECKED`다.
+2. 알림 대상자 전체의 DB 트랜잭션이 커밋된 후 `NOTI_GENERATED`다.
+3. 현재 작업의 알림을 모두 Publish한 후 `DONE`이다.
+4. 알림 일부 저장 후 장애가 발생하면 다음 실행에서 전체 대상을 다시 산출하고 UNIQUE Upsert로 누락만 복구한다.
+5. Publish 일부 완료 후 장애가 발생하면 `NOTI_GENERATED`가 유지되고 다음 실행에서 전체를 다시 Publish한다.
+
+## 7. 실시간 전달과 ACK
+
+### 7.1 Redis Pub/Sub
+
+- Redis Pub/Sub 채널명은 소문자 `planit:notifications`로 고정한다.
+- Redis 채널명은 대소문자를 구분하므로 publisher와 모든 subscriber가 정확히 `planit:notifications`를 사용한다.
+- 내부 이벤트 DTO와 WebSocket 응답 DTO는 필드가 같더라도 별도 타입으로 둔다.
+
+```json
+{
+  "recipientPublicId": "user-public-id",
+  "notificationId": "16001",
+  "notificationType": "TRIP_WEATHER_ALERT",
+  "title": "여행지에 많은 비가 예상돼요",
+  "body": "여행 기간에 폭우가 예상됩니다.",
+  "createdAt": "2026-10-13T10:00:00.123456+09:00"
+}
+```
+
+### 7.2 WebSocket
+
+- 구독 destination은 `/user/queue/notifications`다.
+- 각 인스턴스는 Redis 이벤트를 받은 후 자신이 보유한 연결 중 수신 사용자가 있는 경우만 전송한다.
+- WebSocket payload에서는 서버 내부 라우팅용 `recipientPublicId`를 제외한다.
+- 서버의 WebSocket 전송 메서드 성공은 클라이언트 수신 증거가 아니다.
+
+### 7.3 클라이언트 ACK
+
+1. `notificationId`로 이미 화면에 반영했는지 확인한다.
+2. 미처리 알림은 화면과 상태 Store에 반영한다.
+3. `notification:{userPublicId}:{notificationId}`를 `expiredAt`과 함께 localStorage에 저장한다.
+4. ACK API를 호출한다.
+5. localStorage에 이미 있던 알림도 이전 ACK 실패를 복구하기 위해 ACK API는 다시 호출한다.
+6. `expiredAt`은 해당 알림을 수신한 시각으로부터 20시간 후로 설정한다.
+7. 서비스 진입 시 현재 시각이 `expiredAt` 이상인 알림 키를 일괄 삭제한 후 WebSocket 연결과 미전달 알림 복구를 진행한다.
+
+## 8. 미접속·재연결 복구
+
+1. 서비스 진입 시 WebSocket을 연결한다.
+2. `/user/queue/notifications`의 구독 완료를 확인한다.
+3. `GET /api/notifications/pending-deliveries`를 호출한다.
+4. 조회된 알림을 화면에 반영한 후 개별 ACK를 호출한다.
+5. 실시간 이벤트와 HTTP 복구 응답이 겹치면 `notificationId`로 병합한다.
+
+## 9. 권장 구현 순서
+
+1. Flyway로 `delivered_at`과 UNIQUE `dedupe_key` 추가
+2. Notification Entity·Repository·Upsert와 ACK 수정 쿼리 구현
+3. Redis JSON 저장·상태 전이·TTL Lua Script 구현
+4. ShedLock과 두 번의 스케줄 트리거가 같은 상태 머신을 호출하도록 구현
+5. 알림 생성 Upsert와 Redis Pub/Sub publisher·subscriber 구현
+6. 사용자 WebSocket destination과 인증·라우팅 구현
+7. pending-deliveries·delivery-ack HTTP API 구현
+8. 프론트엔드 전역 WebSocket 연결·Store·localStorage 중복 방지·ACK 구현
+
+## 10. 검증 체크리스트
+
+### DB와 HTTP
+
+- [ ] 동일 `dedupe_key`로 동시 생성해도 알림 행이 하나만 남는다.
+- [ ] Upsert 재실행이 기존 `read_at`, `delivered_at`, `created_at`을 변경하지 않는다.
+- [ ] ACK는 최초와 반복 요청 모두 성공하고 최초 `delivered_at`을 유지한다.
+- [ ] 다른 사용자의 ACK는 `404 NOTIFICATION_NOT_FOUND`다.
+- [ ] pending-deliveries는 서울 기준 당일·미전달·미삭제·대상 알림 유형만 반환한다.
+
+### 스케줄러와 Redis
+
+- [ ] 두 인스턴스가 동시 실행해도 하나만 ShedLock을 획득한다.
+- [ ] 서울 시각 `10:00` 첫 실행과 `10:30` 복구 실행이 같은 상태 머신과 락 이름을 사용한다.
+- [ ] AI 성공 후 Redis 저장 전 장애는 두 번째 실행에서 AI를 다시 호출한다.
+- [ ] `PRECHECKED` 장애는 알림 DB 생성부터 재개한다.
+- [ ] `NOTI_GENERATED` 장애는 Publish부터 재개한다.
+- [ ] `DONE`은 두 번째 실행에서 즉시 종료한다.
+- [ ] `lockAtMostFor` 초과 실행을 메트릭으로 감지한다.
+- [ ] 최초 Redis JSON 생성은 `CREATED`, 기존 키는 `ALREADY_EXISTS`를 반환한다.
+- [ ] Redis 오류 발생 시 후속 단계로 진행하지 않고 작업을 실패 처리한다.
+
+### 실시간 전달과 복구
+
+- [ ] 접속 사용자는 WebSocket으로 알림을 받고 ACK한다.
+- [ ] 미접속 사용자는 접속 후 pending-deliveries로 복구한다.
+- [ ] Pub/Sub 중복 이벤트는 화면에 한 번만 노출하고 ACK는 다시 보낸다.
+- [ ] WebSocket 구독과 pending-deliveries 조회 중 겹친 알림을 `notificationId`로 병합한다.
+- [ ] Redis Pub/Sub에 구독 인스턴스가 없어도 DB 알림은 pending-deliveries로 복구된다.
+- [ ] publisher와 모든 subscriber가 소문자 `planit:notifications` 채널을 사용한다.
+- [ ] localStorage 항목은 수신 후 20시간에 만료되고 서비스 진입 시 일괄 정리된다.
+
+## 11. 아직 확인해야 할 값
+
+- 운영 알림·메트릭·Sentry 연결 기준

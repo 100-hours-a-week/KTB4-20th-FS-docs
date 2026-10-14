@@ -31,8 +31,8 @@
 | 오픈 채팅 | 7 | 1 | 지역 채팅방, 정책 동의, 입퇴장, 메시지·이미지 |
 | 커뮤니티 | 5 | 0 | 완료 일정 조회, 조회 집계와 좋아요 |
 | 포토 미션 | 11 | 0 | 미션 생성·조회, 사진 제출·판정·삭제, 앨범 |
-| 알림 | 4 | 0 | 목록, 미읽음 수, 개별·전체 읽음 |
-| **합계** | **58** | **1** |  |
+| 알림 | 6 | 1 | 목록, 미읽음 수, 개별·전체 읽음, 미전달 복구, 수신 ACK |
+| **합계** | **60** | **2** |  |
 
 숫자는 상세 계약 검토에서 API를 합치거나 나누면 변경될 수 있다. 서버 내부 스케줄러·작업자 인터페이스는 포함하지 않는다.
 
@@ -215,8 +215,18 @@ HTTP는 방·정책·참여·과거 이력·이미지 업로드를 담당하고 
 | 미읽음 알림 수 | `GET` | `/api/notifications/unread-count` | 알림 표시점과 미읽음 수 조회 | Access Token 본인 | `APPROVED` |
 | 알림 읽음 | `PUT` | `/api/notifications/{notificationId}/read` | 개별 알림을 멱등하게 읽음 처리 | Access Token 본인 | `APPROVED` |
 | 알림 모두 읽음 | `PUT` | `/api/notifications/read-all` | 현재 사용자의 모든 알림을 읽음 처리 | Access Token 본인 | `APPROVED` |
+| 당일 미전달 알림 | `GET` | `/api/notifications/pending-deliveries` | 알림 채널 구독 후 당일 미전달 날씨·D-1 알림 복구 | Access Token 본인 | `APPROVED` |
+| 알림 수신 ACK | `PUT` | `/api/notifications/{notificationId}/delivery-ack` | 화면 반영을 완료한 알림의 `delivered_at`을 멱등 기록 | Access Token 본인 | `APPROVED` |
 
-날씨 조회, 알림 생성과 중복 방지는 서버 내부 작업이다. 푸시 알림은 동의·발송 정책이 정해지지 않아 목록에서 제외했다.
+날씨 조회, 알림 생성, `dedupe_key` 중복 방지와 Redis Pub/Sub 발행은 서버 내부 작업이다. 외부 AI `/precheck`는 서울 시각 `10:00` 첫 스케줄과 `10:30` 장애 복구 스케줄에서 실행 상태에 따라 스케줄당 1회 호출하며, 두 번째 실행은 Redis 상태를 보고 미완료 단계만 재실행한다. 푸시 알림은 동의·발송 정책이 정해지지 않아 목록에서 제외했다.
+
+### 9.1 실시간 알림 인터페이스
+
+| 인터페이스 | 방식 | 경로 | 목적 | 상태 |
+| --- | --- | --- | --- | --- |
+| 사용자 알림 구독 | Spring WebSocket + STOMP | `/user/queue/notifications` | Redis Pub/Sub 이벤트를 현재 연결된 수신 사용자에게 실시간 전달 | `APPROVED` |
+
+WebSocket 전달은 at-least-once 시도로 취급한다. 클라이언트는 `notificationId`로 중복 화면 노출을 방지하고, 표시 후 ACK API를 호출한다. 실시간 수신을 놓친 사용자는 알림 채널 구독 후 당일 미전달 조회 API로 복구한다.
 
 알림은 생성 후 90일이 되면 `deleted_at`을 기록해 소프트 삭제하고 사용자 API에서 제외한다. 이동 대상이 먼저 만료돼도 삭제 전까지 알림과 읽음 상태를 유지하며 읽지 않은 알림 수에도 포함한다. 만료 알림을 선택하면 읽음 처리만 하고 대상 화면으로 이동하지 않는다. 상대 시간 문구는 `createdAt`을 기준으로 클라이언트가 계산한다.
 
@@ -226,13 +236,13 @@ HTTP는 방·정책·참여·과거 이력·이미지 업로드를 담당하고 
 
 | 내부 작업 | 근거 | 향후 계약 |
 | --- | --- | --- |
-| D-1 날씨 조회 실행 | `weather_checks` | 스케줄러·날씨 제공자 adapter |
+| D-1 외부 요인 조회 실행 | AI `/precheck`·Redis JSON 상태 | ShedLock 스케줄러와 장애 복구용 두 번째 실행 |
 | AI 일정 생성 실행·재시도 | `schedule_generation_jobs` | 비동기 작업 큐와 worker |
 | V1 AI 장소 추천 호출 | 별도 AI 연동 컴포넌트 | 동기 일정 생성 흐름에서 장소 6개를 동선 계산 컴포넌트에 전달 |
 | 일별 포토 미션 생성 실행 | `mission_generation_jobs` | 비동기 작업 큐와 worker |
 | 사진 AI 판정 실행 | `photo_evaluations` | 객체 저장 이벤트 또는 작업 큐와 worker |
 | 완료 여행 커뮤니티 게시 | `community_posts` | 여행 종료 이벤트 처리 |
-| 날씨·일정 알림 생성 | `notifications` | 내부 도메인 이벤트와 알림 worker |
+| 날씨·일정 알림 생성·발행 | `notifications`·Redis Pub/Sub | UNIQUE `dedupe_key` Upsert, Redis 상태 복구와 WebSocket 실시간 전달 |
 | 채팅 위반·제재 누적 | `chat_violations`, `chat_sanctions` | 메시지 검사와 제재 정책 처리 |
 
 worker callback을 HTTP로 구현할지는 배포 구조가 정해질 때 별도의 내부 API 계약으로 다룬다.

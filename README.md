@@ -31,6 +31,7 @@ PlanIt의 공통 기획, 비즈니스 규칙, API 계약과 데이터 모델 문
 
 - [프론트엔드 설정 과정](./frontend/SETUP.md)
 - [백엔드 기술 스택](./backend/TECH_STACK.md)
+- [알림 기능 구현 가이드](./backend/NOTIFICATION_IMPLEMENTATION_GUIDE.md)
 
 ## 관리 기준
 
