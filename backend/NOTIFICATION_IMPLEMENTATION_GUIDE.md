@@ -21,7 +21,7 @@
 | 순서 | 이슈 | 상태 | 담당 문서 범위 | 현재 구현과 다음 시작점 |
 | ---: | --- | --- | --- | --- |
 | 1 | [#182 알림 도메인 모델 및 DB 스키마](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/182) | `IMPLEMENTED` | 2절, 3절 | Entity·Repository·V30·평문 `dedupe_key`·UNIQUE Upsert·동시성 테스트 구현. 기존 `read_at`, `delivered_at`, `deleted_at`이 값이 있는 상태에서도 Upsert 후 보존되는지 통합 테스트를 보강하면 `VERIFIED`로 전환 가능 |
-| 2 | [#184 AI 날씨 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `NOT_STARTED` | 4절, 5.1절 | **다음 백엔드 구현 시작점.** AI Client·응답 DTO와 Redis JSON `NX`·TTL Lua Script부터 구현 |
+| 2 | [#184 AI 외부 요인 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `NOT_STARTED` | 4절, 5.1절 | **다음 백엔드 구현 시작점.** AI Client·응답 DTO와 Redis JSON `NX`·TTL Lua Script부터 구현 |
 | 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `NOT_STARTED` | 5절, 6절 | #184 완료 후 동일 상태 머신을 호출하는 10:00·10:30 스케줄과 ShedLock 구현 |
 | 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `PARTIAL` | 3절, 6절 | #182의 단건 UNIQUE Upsert 기반은 구현됨. 대상 여행·사용자 조회, 유형별 내용 생성, 일괄 저장과 `NOTI_GENERATED` 전이는 미구현 |
 | 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `NOT_STARTED` | 6절, 7.1절 | `planit:notifications` Publisher·Subscriber와 Publish 후 `DONE` 전이 구현 |
@@ -66,7 +66,7 @@ ALTER TABLE notifications
 ### 4.1 키와 TTL
 
 ```text
-planit:weather:precheck:{targetDate}
+planit:trip-remind:precheck:{targetDate}
 ```
 
 - `targetDate`는 `yyyy-MM-dd`형식의 여행 시작 대상일이다.
@@ -122,7 +122,7 @@ return 'CREATED'
 ## 5. ShedLock과 장애 복구
 
 - 첫 실행은 매일 `10:00`, 장애 복구용 두 번째 실행은 매일 `10:30`에 `Asia/Seoul` 기준으로 예약한다.
-- 두 실행은 동일한 상태 머신 메서드와 ShedLock 이름 `weatherNotificationWorkflow`를 사용한다.
+- 두 실행은 동일한 상태 머신 메서드와 ShedLock 이름 `tripRemindNotificationWorkflow`를 사용한다.
 - 초기 값은 `lockAtMostFor=PT5M`, `lockAtLeastFor=PT1M`으로 설정한다.
 - AI `/precheck`는 스케줄 실행당 1회만 호출하고 `@Retryable`을 사용하지 않는다.
 - AI 호출이 실패하면 Redis JSON을 생성하지 않고 예외·로그·메트릭을 남긴다.
@@ -133,11 +133,11 @@ return 'CREATED'
 @Scheduled(cron = "0 0 10 * * *", zone = "Asia/Seoul")
 @Scheduled(cron = "0 30 10 * * *", zone = "Asia/Seoul")
 @SchedulerLock(
-        name = "weatherNotificationWorkflow",
+        name = "tripRemindNotificationWorkflow",
         lockAtMostFor = "PT5M",
         lockAtLeastFor = "PT1M"
 )
-public void executeWeatherNotificationWorkflow() {
+public void executeTripRemindNotificationWorkflow() {
     LockAssert.assertLocked();
     // Redis 상태에 맞는 단계 실행
 }
@@ -150,47 +150,59 @@ public void executeWeatherNotificationWorkflow() {
 - `X-Internal-Token: ${AI_INTERNAL_API_KEY}` 헤더만 추가한다.
 - 스케줄 실행당 한 번만 요청하며 `@Retryable`은 사용하지 않는다.
 - HTTP 200이 아니거나, body가 없거나, 아래 응답 구조로 역직렬화할 수 없으면 해당 실행을 실패 처리하고 Redis JSON을 생성하지 않는다.
+- `generated_at`은 UTC ISO-8601 시각이다.
+- `forecasts`에는 `generated_at`의 서울 날짜를 기준으로 다음 날(`D+1`)부터 9일 후(`D+9`)까지 날짜순으로 정확히 9개 항목이 포함된다.
+- `region`은 `REGION-SEOUL`, `REGION-GYEONGJU`, `REGION-BUSAN`, `REGION-JEONJU`, `REGION-JEJU`와 같은 백엔드 기준 지역 코드를 사용한다.
+- 날씨 제약은 날짜·지역 단위로 표현하며, 일정 재생성은 이 응답을 사용하는 별도 AI 흐름의 책임이다.
 
-이상 상황이 있는 경우:
+AI 응답 예시:
 
 ```json
 {
   "status_code": 200,
   "data": {
-    "has_issue": true,
-    "affected_place_ids": [
-      "place_123",
-      "place_456"
-    ],
-    "reasons": [
+    "generated_at": "2026-10-10T01:00:03Z",
+    "forecasts": [
       {
-        "category": "weather_risk",
-        "detail": "heavy_rain"
-      },
-      {
-        "category": "closure_risk",
-        "detail": "temporary_closure"
+        "date": "2026-10-11",
+        "regions": [
+          {
+            "region": "REGION-SEOUL",
+            "has_issue": true,
+            "reasons": [
+              {
+                "category": "weather_risk",
+                "detail": "heavy_rain"
+              }
+            ]
+          },
+          {
+            "region": "REGION-BUSAN",
+            "has_issue": false,
+            "reasons": []
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-이상 상황이 없는 경우:
+위 예시는 첫 날짜만 축약해 표시하며 실제 응답에는 `D+1`부터 `D+9`까지 9개 날짜 항목이 있어야 한다.
+
+Redis JSON 저장 예시:
 
 ```json
 {
-  "status_code": 200,
-  "data": {
-    "has_issue": false,
-    "affected_place_ids": [],
-    "reasons": []
-  }
+  "generated_at": "2026-10-10T01:00:03Z",
+  "status": "PRECHECKED",
+  "forecasts": []
 }
 ```
 
-- `has_issue=false`도 정상 완료 결과이며 빈 배열을 포함한 응답 전체를 Redis에 저장한다.
-- `has_issue=true`이면 `affected_place_ids`와 일정 방문 장소를 비교해 영향받는 여행과 수신자를 결정한다.
+- `status`는 AI 응답 필드가 아니다. 백엔드가 AI 응답을 Redis JSON으로 변환해 최초 저장할 때 `PRECHECKED`를 추가한다.
+- 지역의 `has_issue=false`와 빈 `reasons` 배열도 정상 결과이며 그대로 Redis에 저장한다.
+- `has_issue=true`이면 날짜와 지역 코드를 여행 일정과 비교해 영향받는 여행과 수신자를 결정한다.
 - `status_code`는 응답 body 필드이고 실제 HTTP status도 별도로 200인지 검증한다.
 
 ## 6. 스케줄 상태 머신
