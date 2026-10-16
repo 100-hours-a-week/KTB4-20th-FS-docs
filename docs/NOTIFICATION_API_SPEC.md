@@ -272,11 +272,13 @@ request body는 사용하지 않는다.
 
 ### 내부 스케줄링 정책
 
+- 상태 저장소는 JSON 자료형이 통합된 Redis Open Source 8.x를 사용하며 별도 RedisJSON 모듈을 설치하지 않는다.
 - Redis JSON 키는 `planit:trip-remind:precheck:{targetDate}`를 사용하고 TTL은 20시간이다.
 - 최초 저장은 `JSON.SET ... NX`와 `EXPIRE` 조합을 Lua Script로 원자적으로 수행한다. 생성 성공은 `CREATED`, 기존 키로 인한 미생성은 `ALREADY_EXISTS`를 반환하며, Redis 오류는 작업 실패로 처리하고 후속 단계로 진행하지 않는다.
 - 상태는 `PRECHECKED`(외부 요인 조회 완료), `NOTI_GENERATED`(알림 DB 커밋 완료), `DONE`(Redis Pub/Sub 발행 시도 완료)을 사용한다.
 - 외부 AI `/precheck`는 스케줄 실행당 1회만 호출하고 `@Retryable`을 사용하지 않는다. 장애 복구용 두 번째 스케줄이 Redis 상태를 보고 미완료 단계를 재실행한다.
 - 첫 스케줄은 매일 `10:00`, 장애 복구 스케줄은 매일 `10:30`에 `Asia/Seoul` 기준으로 실행하고 동일한 ShedLock 이름을 사용한다. 초기 설정은 `lockAtMostFor=PT5M`, `lockAtLeastFor=PT1M`이다.
+- ShedLock은 동일한 Redis의 `job-lock:planit:*` 키를 사용하며 RDB Lock 테이블은 사용하지 않는다.
 - AI 요청은 body와 query parameter 없이 `GET ${AI_BASE_URL}/precheck`와 `X-Internal-Token: ${AI_INTERNAL_API_KEY}` 헤더를 사용한다. HTTP 200과 body의 `status_code=200`을 모두 확인한다.
 - AI 응답의 `data`는 UTC ISO-8601 `generated_at`과 날짜별 `forecasts`를 포함한다. `forecasts`는 생성 시각의 서울 날짜 기준 `D+1`부터 `D+9`까지 날짜순으로 정확히 9개이며, 각 날짜는 백엔드 기준 지역 코드별 `has_issue`와 `reasons`를 포함한다.
 - `status`는 AI 응답값이 아니다. 백엔드는 AI 응답의 `generated_at`과 `forecasts`를 Redis JSON으로 저장하면서 최초 상태 `PRECHECKED`를 추가한다.

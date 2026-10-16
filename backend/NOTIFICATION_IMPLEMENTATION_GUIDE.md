@@ -21,23 +21,31 @@
 | 순서 | 이슈 | 상태 | 담당 문서 범위 | 현재 구현과 다음 시작점 |
 | ---: | --- | --- | --- | --- |
 | 1 | [#182 알림 도메인 모델 및 DB 스키마](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/182) | `IMPLEMENTED` | 2절, 3절 | Entity·Repository·V30·평문 `dedupe_key`·UNIQUE Upsert·동시성 테스트 구현. 기존 `read_at`, `delivered_at`, `deleted_at`이 값이 있는 상태에서도 Upsert 후 보존되는지 통합 테스트를 보강하면 `VERIFIED`로 전환 가능 |
-| 2 | [#184 AI 외부 요인 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `NOT_STARTED` | 4절, 5.1절 | **다음 백엔드 구현 시작점.** AI Client·응답 DTO와 Redis JSON `NX`·TTL Lua Script부터 구현 |
-| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `NOT_STARTED` | 5절, 6절 | #184 완료 후 동일 상태 머신을 호출하는 10:00·10:30 스케줄과 ShedLock 구현 |
-| 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `PARTIAL` | 3절, 6절 | #182의 단건 UNIQUE Upsert 기반은 구현됨. 대상 여행·사용자 조회, 유형별 내용 생성, 일괄 저장과 `NOTI_GENERATED` 전이는 미구현 |
-| 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `NOT_STARTED` | 6절, 7.1절 | `planit:notifications` Publisher·Subscriber와 Publish 후 `DONE` 전이 구현 |
+| 2 | [#184 AI 외부 요인 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `IMPLEMENTED` | 4절, 5.1절 | AI Client·응답 DTO, 키가 없을 때만 AI를 호출하는 오케스트레이션, Redis JSON 최초 생성·조회와 순차 조건부 상태 전이를 구현. Store는 JSON이 통합된 Redis 8에서, 연결 흐름은 단위 테스트로 검증 |
+| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `IMPLEMENTED` | 5절, 6절 | Redis 기반 ShedLock과 동일 워크플로를 호출하는 10:00·10:30 스케줄, 서울 기준 D+1 계산 및 Precheck 재시도를 구현. 상태별 후속 동작 자체는 #186·#183의 책임이며, 두 이슈가 연결되면 같은 스케줄이 `PRECHECKED`·`NOTI_GENERATED`에서 재개 |
+| 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `VERIFIED` | 3절, 6절 | `PRECHECKED` 결과로 D-1 여행·활성 참여자를 조회하고, 여행 기간·지역의 이상 기후 여부에 따라 사용자별 `TRIP_D1` 또는 `TRIP_WEATHER_ALERT` 하나를 UNIQUE Upsert로 저장한 뒤 `NOTI_GENERATED`로 전이. 반복 실행 멱등성 통합 테스트까지 통과 |
+| 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `PARTIAL` | 6절, 7.1절 | **다음 백엔드 구현 시작점.** 서울 기준 당일 미전달·미삭제 알림 조회와 내부 발행 이벤트 변환을 구현. `planit:notifications` Publisher·Subscriber와 Publish 완료 후 `DONE` 전이는 미구현 |
 | 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `NOT_STARTED` | 7.2절 | `/user/queue/notifications` 인증·구독·사용자별 라우팅 구현 |
 | 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `NOT_STARTED` | API 명세 2~5절 | 목록 Cursor·미읽음 수·개별/전체 읽음 API 구현 |
 | 8 | [#189 알림 ACK 및 미전달 알림 복구 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/189) | `PARTIAL` | 7.3절, 8절 | 소유권·미삭제 조건의 멱등 `delivered_at` DB 처리는 구현·검증됨. pending 조회, Service·Controller·응답/오류 코드와 경합 테스트는 미구현 |
 | 9 | [#192 알림 소프트 삭제 및 운영 모니터링](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/192) | `NOT_STARTED` | API 명세 9절, 가이드 11절 | 90일 소프트 삭제와 로그·메트릭 구현 |
-| 10 | [#193 알림 생성·전송·복구 통합 테스트](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/193) | `PARTIAL` | 10절 전체 | #182 Upsert 동시성과 #189 ACK 영속성은 검증됨. 전체 Precheck→생성→전송→복구 시나리오는 미구현 |
+| 10 | [#193 알림 생성·전송·복구 통합 테스트](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/193) | `PARTIAL` | 10절 전체 | #182 Upsert 동시성, #186 반복 생성 멱등성, #189 ACK 영속성은 검증됨. 전체 Precheck→생성→전송→복구 시나리오는 미구현 |
 
 프론트엔드는 [#190 전역 알림 연결 및 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/190), [#191 알림 목록·배지·이상 기후 팝업 UI](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/191)에서 별도로 진행한다.
+
+### 1.2 다음 세션 인계
+
+- 시작 이슈는 `#183`이다. `#186`의 알림 대상 산출·DB 저장·`NOTI_GENERATED` 전이는 변경하지 않는다.
+- 당일 미전달·미삭제 `TRIP_D1`·`TRIP_WEATHER_ALERT` 조회와 내부 발행 이벤트 변환은 구현됐다.
+- 다음 구현 단위는 고정 채널 `planit:notifications` Publisher와 직렬화 테스트다.
+- 그다음 Subscriber를 구현하되 실제 사용자 WebSocket 전송은 `#188`의 사용자별 라우팅과 연결한다.
+- 모든 대상 Publish 반복이 예외 없이 끝난 후에만 `NOTI_GENERATED → DONE`으로 전이한다. 일부 Publish 실패 시 `NOTI_GENERATED`를 유지해 10:30 복구 실행에서 전체를 다시 발행한다.
 
 ## 2. 책임 분리
 
 | 구성요소 | 책임 |
 | --- | --- |
-| ShedLock | 동일한 스케줄 작업의 동시 실행 방지 |
+| ShedLock | Redis Lock Key를 사용해 동일한 스케줄 작업의 동시 실행 방지 |
 | Redis JSON | AI precheck 결과와 작업 진행 상태를 20시간 보관 |
 | `notifications` | 알림 원본, 읽음·전달·소프트 삭제 상태 보관 |
 | UNIQUE `dedupe_key` | 스케줄 재실행 시 중복 알림 행 생성 방지 |
@@ -45,6 +53,10 @@
 | WebSocket | 이벤트 수신 인스턴스에 연결된 사용자에게 실시간 전달 |
 | ACK API | 클라이언트 화면 반영 후 `delivered_at` 멱등 기록 |
 | pending-deliveries API | 미접속·재연결 사용자의 당일 미전달 알림 복구 |
+
+- Redis는 JSON 자료형이 통합된 Redis Open Source 8.x를 사용한다.
+- 별도 RedisJSON 모듈 설치나 Redis Stack 이미지를 사용하지 않는다.
+- ShedLock도 동일한 Redis의 `job-lock:planit:*` 키를 사용하며 별도 RDB 테이블을 생성하지 않는다.
 
 ## 3. DB 변경 요구사항
 
@@ -271,9 +283,9 @@ Redis JSON 저장 예시:
 
 1. `#182` Flyway·Notification Entity·Repository·UNIQUE Upsert
 2. `#184` AI `/precheck`·Redis JSON·상태 전이·TTL Lua Script
-3. `#185` ShedLock과 10:00·10:30 스케줄 트리거·장애 복구 분기
-4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이
-5. `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이
+3. `#185` Redis ShedLock과 10:00·10:30 스케줄 트리거·Precheck 재시도 (`IMPLEMENTED`)
+4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이 (`VERIFIED`)
+5. **다음 시작점:** `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이 (`PARTIAL`)
 6. `#188` 사용자 WebSocket destination·인증·라우팅
 7. `#187` 알림 목록·미읽음·읽음 처리 API
 8. `#189` pending-deliveries·delivery-ack HTTP API
@@ -294,7 +306,7 @@ Redis JSON 저장 예시:
 ### 스케줄러와 Redis
 
 - [ ] 두 인스턴스가 동시 실행해도 하나만 ShedLock을 획득한다.
-- [ ] 서울 시각 `10:00` 첫 실행과 `10:30` 복구 실행이 같은 상태 머신과 락 이름을 사용한다.
+- [x] 서울 시각 `10:00` 첫 실행과 `10:30` 복구 실행이 같은 상태 머신과 락 이름을 사용한다. (`#185` 단위 테스트 완료)
 - [ ] AI 성공 후 Redis 저장 전 장애는 두 번째 실행에서 AI를 다시 호출한다.
 - [ ] `PRECHECKED` 장애는 알림 DB 생성부터 재개한다.
 - [ ] `NOTI_GENERATED` 장애는 Publish부터 재개한다.
