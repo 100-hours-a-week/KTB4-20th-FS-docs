@@ -24,9 +24,9 @@
 | 2 | [#184 AI 외부 요인 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `IMPLEMENTED` | 4절, 5.1절 | AI Client·응답 DTO, 키가 없을 때만 AI를 호출하는 오케스트레이션, Redis JSON 최초 생성·조회와 순차 조건부 상태 전이를 구현. Store는 JSON이 통합된 Redis 8에서, 연결 흐름은 단위 테스트로 검증 |
 | 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `IMPLEMENTED` | 5절, 6절 | Redis 기반 ShedLock과 동일 워크플로를 호출하는 10:00·10:30 스케줄, 서울 기준 D+1 계산 및 Precheck 재시도를 구현. 상태별 후속 동작 자체는 #186·#183의 책임이며, 두 이슈가 연결되면 같은 스케줄이 `PRECHECKED`·`NOTI_GENERATED`에서 재개 |
 | 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `VERIFIED` | 3절, 6절 | `PRECHECKED` 결과로 D-1 여행·활성 참여자를 조회하고, 여행 기간·지역의 이상 기후 여부에 따라 사용자별 `TRIP_D1` 또는 `TRIP_WEATHER_ALERT` 하나를 UNIQUE Upsert로 저장한 뒤 `NOTI_GENERATED`로 전이. 반복 실행 멱등성 통합 테스트까지 통과 |
-| 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `PARTIAL` | 6절, 7.1절 | **다음 백엔드 구현 시작점.** 서울 기준 당일 미전달·미삭제 알림 조회와 내부 발행 이벤트 변환을 구현. `planit:notifications` Publisher·Subscriber와 Publish 완료 후 `DONE` 전이는 미구현 |
-| 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `NOT_STARTED` | 7.2절 | `/user/queue/notifications` 인증·구독·사용자별 라우팅 구현 |
-| 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `NOT_STARTED` | API 명세 2~5절 | 목록 Cursor·미읽음 수·개별/전체 읽음 API 구현 |
+| 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `IMPLEMENTED` | 6절, 7.1절 | 당일 미전달·미삭제 알림 조회, 내부 이벤트 변환, `planit:notifications` Publisher·Subscriber, `NOTI_GENERATED` 재개와 전체 Publish 성공 후 `DONE` 전이를 구현. 실제 Redis 다중 인스턴스 전달 검증은 #193에서 수행 |
+| 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `VERIFIED` | 7.2절 | 내부 Spring 이벤트를 사용자 전용 응답 DTO로 변환해 `/user/queue/notifications`로 라우팅. 인증 STOMP 연결·구독 `RECEIPT`·실제 수신과 서울 오프셋 보존을 통합 테스트로 검증 |
+| 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `NOT_STARTED` | API 명세 2~5절 | **다음 백엔드 구현 시작점.** 목록 Cursor 조회부터 구현한 뒤 미읽음 수·개별/전체 읽음 처리를 순차 구현 |
 | 8 | [#189 알림 ACK 및 미전달 알림 복구 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/189) | `PARTIAL` | 7.3절, 8절 | 소유권·미삭제 조건의 멱등 `delivered_at` DB 처리는 구현·검증됨. pending 조회, Service·Controller·응답/오류 코드와 경합 테스트는 미구현 |
 | 9 | [#192 알림 소프트 삭제 및 운영 모니터링](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/192) | `NOT_STARTED` | API 명세 9절, 가이드 11절 | 90일 소프트 삭제와 로그·메트릭 구현 |
 | 10 | [#193 알림 생성·전송·복구 통합 테스트](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/193) | `PARTIAL` | 10절 전체 | #182 Upsert 동시성, #186 반복 생성 멱등성, #189 ACK 영속성은 검증됨. 전체 Precheck→생성→전송→복구 시나리오는 미구현 |
@@ -35,11 +35,10 @@
 
 ### 1.2 다음 세션 인계
 
-- 시작 이슈는 `#183`이다. `#186`의 알림 대상 산출·DB 저장·`NOTI_GENERATED` 전이는 변경하지 않는다.
-- 당일 미전달·미삭제 `TRIP_D1`·`TRIP_WEATHER_ALERT` 조회와 내부 발행 이벤트 변환은 구현됐다.
-- 다음 구현 단위는 고정 채널 `planit:notifications` Publisher와 직렬화 테스트다.
-- 그다음 Subscriber를 구현하되 실제 사용자 WebSocket 전송은 `#188`의 사용자별 라우팅과 연결한다.
-- 모든 대상 Publish 반복이 예외 없이 끝난 후에만 `NOTI_GENERATED → DONE`으로 전이한다. 일부 Publish 실패 시 `NOTI_GENERATED`를 유지해 10:30 복구 실행에서 전체를 다시 발행한다.
+- 시작 이슈는 `#187`이다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
+- `#188`은 내부 `NotificationPublishEvent`를 수신 사용자 전용 DTO로 변환해 `/user/queue/notifications`로 전송한다.
+- 알림 구독은 인증된 STOMP 연결에서 `receipt` 헤더를 받아 공통 `StompSubscriptionReceiptEvent`로 `RECEIPT` 프레임을 반환한다.
+- 첫 구현 단위는 `GET /api/notifications` 목록 Cursor 조회다. 미읽음 수와 개별·전체 읽음 처리는 이후 단위로 분리한다.
 
 ## 2. 책임 분리
 
@@ -257,8 +256,10 @@ Redis JSON 저장 예시:
 ### 7.2 WebSocket
 
 - 구독 destination은 `/user/queue/notifications`다.
+- 인증된 클라이언트가 `receipt` 헤더와 함께 구독하면 구독 등록 후 같은 값을 `receipt-id`로 가진 STOMP `RECEIPT` 프레임을 반환한다.
 - 각 인스턴스는 Redis 이벤트를 받은 후 자신이 보유한 연결 중 수신 사용자가 있는 경우만 전송한다.
 - WebSocket payload에서는 서버 내부 라우팅용 `recipientPublicId`를 제외한다.
+- `createdAt`은 직렬화 과정에서 서울 오프셋을 유지한다.
 - 서버의 WebSocket 전송 메서드 성공은 클라이언트 수신 증거가 아니다.
 
 ### 7.3 클라이언트 ACK
@@ -285,9 +286,9 @@ Redis JSON 저장 예시:
 2. `#184` AI `/precheck`·Redis JSON·상태 전이·TTL Lua Script
 3. `#185` Redis ShedLock과 10:00·10:30 스케줄 트리거·Precheck 재시도 (`IMPLEMENTED`)
 4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이 (`VERIFIED`)
-5. **다음 시작점:** `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이 (`PARTIAL`)
-6. `#188` 사용자 WebSocket destination·인증·라우팅
-7. `#187` 알림 목록·미읽음·읽음 처리 API
+5. `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이 (`IMPLEMENTED`)
+6. `#188` 사용자 WebSocket destination·인증·라우팅 (`VERIFIED`)
+7. **다음 시작점:** `#187` 알림 목록 Cursor 조회
 8. `#189` pending-deliveries·delivery-ack HTTP API
 9. `#192` 90일 소프트 삭제·운영 로그·메트릭
 10. `#193` 전체 생성·전송·복구 통합 테스트
@@ -317,6 +318,7 @@ Redis JSON 저장 예시:
 
 ### 실시간 전달과 복구
 
+- [x] 인증 사용자가 알림 destination을 구독 완료하고 본인 WebSocket 알림을 수신한다. (`#188` 통합 테스트 완료)
 - [ ] 접속 사용자는 WebSocket으로 알림을 받고 ACK한다.
 - [ ] 미접속 사용자는 접속 후 pending-deliveries로 복구한다.
 - [ ] Pub/Sub 중복 이벤트는 화면에 한 번만 노출하고 ACK는 다시 보낸다.
