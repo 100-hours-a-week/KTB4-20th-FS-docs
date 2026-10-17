@@ -16,29 +16,32 @@
   - `PARTIAL`: 이슈 범위 중 일부만 구현됨
   - `IMPLEMENTED`: 코드 구현은 완료됐지만 이슈 완료 조건 전체가 검증되지 않음
   - `VERIFIED`: 관련 코드와 명시된 테스트가 현재 체크아웃에서 통과함
+  - `NOT_PLANNED`: 제품 결정으로 구현하지 않음
 - 다음 세션은 아래 표의 `다음 시작점`을 확인하고 해당 이슈 범위만 구현한다.
 
 | 순서 | 이슈 | 상태 | 담당 문서 범위 | 현재 구현과 다음 시작점 |
 | ---: | --- | --- | --- | --- |
 | 1 | [#182 알림 도메인 모델 및 DB 스키마](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/182) | `IMPLEMENTED` | 2절, 3절 | Entity·Repository·V30·평문 `dedupe_key`·UNIQUE Upsert·동시성 테스트 구현. 기존 `read_at`, `delivered_at`, `deleted_at`이 값이 있는 상태에서도 Upsert 후 보존되는지 통합 테스트를 보강하면 `VERIFIED`로 전환 가능 |
 | 2 | [#184 AI 외부 요인 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `IMPLEMENTED` | 4절, 5.1절 | AI Client·응답 DTO, 키가 없을 때만 AI를 호출하는 오케스트레이션, Redis JSON 최초 생성·조회와 순차 조건부 상태 전이를 구현. Store는 JSON이 통합된 Redis 8에서, 연결 흐름은 단위 테스트로 검증 |
-| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `IMPLEMENTED` | 5절, 6절 | Redis 기반 ShedLock과 동일 워크플로를 호출하는 10:00·10:30 스케줄, 서울 기준 D+1 계산 및 Precheck 재시도를 구현. 상태별 후속 동작 자체는 #186·#183의 책임이며, 두 이슈가 연결되면 같은 스케줄이 `PRECHECKED`·`NOTI_GENERATED`에서 재개 |
+| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `IMPLEMENTED` | 5절, 6절 | Redis 기반 ShedLock, 동일 워크플로를 호출하는 10:00·10:30 스케줄, 서울 기준 D+1 계산과 상태별 재개를 구현하고 단위 테스트 완료. 이슈 종료 전 두 번째 실행 최종 실패 로깅, 락 만료·실행시간 관측, 실제 다중 인스턴스 락·장애 복구 통합 검증이 필요 |
 | 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `VERIFIED` | 3절, 6절 | `PRECHECKED` 결과로 D-1 여행·활성 참여자를 조회하고, 여행 기간·지역의 이상 기후 여부에 따라 사용자별 `TRIP_D1` 또는 `TRIP_WEATHER_ALERT` 하나를 UNIQUE Upsert로 저장한 뒤 `NOTI_GENERATED`로 전이. 반복 실행 멱등성 통합 테스트까지 통과 |
 | 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `IMPLEMENTED` | 6절, 7.1절 | 당일 미전달·미삭제 알림 조회, 내부 이벤트 변환, `planit:notifications` Publisher·Subscriber, `NOTI_GENERATED` 재개와 전체 Publish 성공 후 `DONE` 전이를 구현. 실제 Redis 다중 인스턴스 전달 검증은 #193에서 수행 |
 | 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `VERIFIED` | 7.2절 | 내부 Spring 이벤트를 사용자 전용 응답 DTO로 변환해 `/user/queue/notifications`로 라우팅. 인증 STOMP 연결·구독 `RECEIPT`·실제 수신과 서울 오프셋 보존을 통합 테스트로 검증 |
 | 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `IMPLEMENTED` | API 명세 2~5절 | Cursor 목록·미읽음 수 조회, 개별 읽음, 전체 읽음 API 구현 완료. `read_at` 동시 요청 순서는 보장하지 않고 최종 읽음 상태만 보장한다. Repository 쿼리·영속화는 MySQL 통합 테스트, Service·Controller는 단위 테스트 완료 |
-| 8 | [#189 알림 ACK 및 미전달 알림 복구 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/189) | `PARTIAL` | 7.3절, 8절 | 소유권·미삭제 조건의 멱등 `delivered_at` DB 처리는 구현·검증됨. pending 조회, Service·Controller·응답/오류 코드와 경합 테스트는 미구현 |
-| 9 | [#192 알림 소프트 삭제 및 운영 모니터링](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/192) | `NOT_STARTED` | API 명세 9절, 가이드 11절 | 90일 소프트 삭제와 로그·메트릭 구현 |
+| 8 | [#189 알림 ACK 및 미전달 알림 복구 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/189) | `VERIFIED` | 7.3절, 8절 | 서울 기준 당일 pending 조회와 소유권·미삭제 조건의 멱등 ACK API 구현. Repository MySQL 통합 테스트, 동시 ACK 경합 테스트, Service·Controller 테스트 통과. ACK 성공 응답은 `data: null` |
+| 9 | [#192 알림 소프트 삭제 및 운영 모니터링](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/192) | `NOT_PLANNED` | API 명세 9절 | 90일 자동 소프트 삭제는 구현하지 않기로 결정. 운영 관측 항목은 필요한 이슈 범위에서 별도로 다룸 |
 | 10 | [#193 알림 생성·전송·복구 통합 테스트](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/193) | `PARTIAL` | 10절 전체 | #182 Upsert 동시성, #186 반복 생성 멱등성, #189 ACK 영속성은 검증됨. 전체 Precheck→생성→전송→복구 시나리오는 미구현 |
 
-프론트엔드는 [#190 전역 알림 연결 및 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/190), [#191 알림 목록·배지·이상 기후 팝업 UI](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/191)에서 별도로 진행한다.
+프론트엔드 [#190 전역 알림 연결 및 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/190), [#191 알림 목록·배지·이상 기후 팝업 UI](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/191)는 다른 도구에서 진행하며 이 백엔드 구현 가이드의 다음 시작점에 포함하지 않는다.
 
 ### 1.2 다음 세션 인계
 
-- 시작 이슈는 `#189`이다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
+- 다음 백엔드 시작 이슈는 아직 열린 `#185`의 미완료 조건 보강이다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
 - `#188`은 내부 `NotificationPublishEvent`를 수신 사용자 전용 DTO로 변환해 `/user/queue/notifications`로 전송한다.
 - 알림 구독은 인증된 STOMP 연결에서 `receipt` 헤더를 받아 공통 `StompSubscriptionReceiptEvent`로 `RECEIPT` 프레임을 반환한다.
-- `#187`의 목록·미읽음 수·개별 읽음·전체 읽음 API는 구현됐다. 다음 구현 단위는 `#189`의 `GET /api/notifications/pending-deliveries`다.
+- `#187`의 목록·미읽음 수·개별 읽음·전체 읽음 API와 `#189`의 pending 조회·ACK API는 구현·검증됐다.
+- `#185`는 스케줄과 상태별 재개 코드가 구현됐지만, 두 번째 실행 최종 실패 로깅, 락 만료·실행시간 관측, 실제 다중 인스턴스 락·장애 복구 통합 검증이 남아 있다.
+- 90일 자동 소프트 삭제는 구현하지 않는다. 프론트엔드는 다른 도구에서 진행한다.
 
 ## 2. 책임 분리
 
@@ -292,11 +295,12 @@ Redis JSON 저장 예시:
 8. `#187` 미읽음 알림 수 조회 (`IMPLEMENTED`)
 9. `#187` 개별 읽음 처리 (`IMPLEMENTED`)
 10. `#187` 전체 읽음 처리 (`IMPLEMENTED`)
-11. **다음 시작점:** `#189` pending-deliveries 조회
-12. `#189` delivery-ack HTTP API
-13. `#192` 90일 소프트 삭제·운영 로그·메트릭
+11. `#189` pending-deliveries 조회 (`VERIFIED`)
+12. `#189` delivery-ack HTTP API (`VERIFIED`)
+13. **다음 시작점:** `#185` 최종 실패 로깅·락 실행 관측·다중 인스턴스 및 장애 복구 검증
 14. `#193` 전체 생성·전송·복구 통합 테스트
-15. `#190`, `#191` 프론트엔드 전역 연결·상태 관리·UI
+
+`#192`의 90일 자동 소프트 삭제는 구현하지 않는다. `#190`, `#191` 프론트엔드는 다른 도구에서 진행한다.
 
 ## 10. 검증 체크리스트
 
@@ -308,9 +312,9 @@ Redis JSON 저장 예시:
 - [x] 개별 읽음은 본인 미삭제 알림만 처리하고 순차 재요청에서 기존 `read_at`을 유지한다. 동시 요청 간 최초 시각 순서는 보장하지 않는다. (`#187` Repository MySQL 통합·Service·Controller 단위 테스트 완료)
 - [x] 전체 읽음은 현재 사용자의 미삭제·미읽음 알림만 같은 시각으로 일괄 갱신하고 반복 요청 시 `updatedCount=0`을 반환한다. (`#187` Repository MySQL 통합·Service·Controller 단위 테스트 완료)
 - [ ] Upsert 재실행이 기존 `read_at`, `delivered_at`, `created_at`을 변경하지 않는다.
-- [x] ACK DB 처리는 최초와 반복 요청 모두 최초 `delivered_at`을 유지한다. (`#189` 영속성 테스트 완료, HTTP API 미구현)
-- [ ] 다른 사용자의 ACK는 `404 NOTIFICATION_NOT_FOUND`다.
-- [ ] pending-deliveries는 서울 기준 당일·미전달·미삭제·대상 알림 유형만 반환한다.
+- [x] ACK DB 처리는 최초와 반복 요청 모두 최초 `delivered_at`을 유지한다. (`#189` 영속성·동시성 테스트 완료)
+- [x] 다른 사용자의 ACK는 `404 NOTIFICATION_NOT_FOUND`다. (`#189` Service·Controller 테스트 완료)
+- [x] pending-deliveries는 서울 기준 당일·미전달·미삭제·대상 알림 유형만 반환한다. (`#189` Repository MySQL 통합·Service·Controller 테스트 완료)
 
 ### 스케줄러와 Redis
 
@@ -337,4 +341,5 @@ Redis JSON 저장 예시:
 
 ## 11. 아직 확인해야 할 값
 
-- 운영 알림·메트릭·Sentry 연결 기준
+- `#185` 두 번째 실행 최종 실패 로그의 필드와 운영 알림 연결 기준
+- `#185` 락 만료·실행시간 메트릭 이름과 경보 임계값

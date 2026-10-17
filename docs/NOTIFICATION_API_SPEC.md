@@ -6,8 +6,8 @@
 - 이 문서의 사용자용 HTTP API 6개는 `APPROVED`다.
 - 인앱 알림만 범위에 포함하며 푸시 알림은 제공하지 않는다.
 - 현재 로그인 사용자에게 생성된 알림만 조회·변경할 수 있다.
-- 알림은 생성 후 90일이 되면 `deleted_at`을 기록해 소프트 삭제하고 사용자 API에서 제외한다.
-- 이동 대상이 만료돼도 90일 전까지 알림과 읽음 상태를 유지한다.
+- 알림 생성 후 90일 자동 소프트 삭제 정책은 적용하지 않는다.
+- 이동 대상이 만료돼도 알림과 읽음 상태를 유지한다.
 - 만료된 알림도 읽기 전까지 미읽음 수에 포함한다. 선택하면 읽음 처리하지만 대상 화면으로 이동하지 않는다.
 - 상대 시간 문구는 API가 제공하지 않는다. 클라이언트가 `createdAt`을 서울 시각 기준으로 변환해 표시한다.
 - 동일 여행·사용자·날짜·알림 유형의 중복 생성은 서버 내부 `dedupe_key`로 방지한다.
@@ -226,16 +226,13 @@ request body는 사용하지 않는다.
 {
   "code": "NOTIFICATION_DELIVERY_ACKNOWLEDGED",
   "message": "알림 수신을 확인했습니다.",
-  "data": {
-    "notificationId": "16001",
-    "deliveredAt": "2026-10-13T10:31:25.123456+09:00"
-  }
+  "data": null
 }
 ```
 
 | HTTP 상태 | API 코드 | 조건 |
 | ---: | --- | --- |
-| `200 OK` | `NOTIFICATION_DELIVERY_ACKNOWLEDGED` | 최초 ACK 또는 기존 ACK 상태 반환 |
+| `200 OK` | `NOTIFICATION_DELIVERY_ACKNOWLEDGED` | 최초 ACK 또는 반복 ACK 성공 |
 | `401 Unauthorized` | `AUTHENTICATION_REQUIRED` | Access Token이 없거나 유효하지 않음 |
 | `404 Not Found` | `NOTIFICATION_NOT_FOUND` | 알림이 없거나 현재 사용자의 알림이 아니거나 이미 소프트 삭제됨 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
@@ -243,7 +240,8 @@ request body는 사용하지 않는다.
 ### 처리 규칙
 
 - `notificationId`와 인증 사용자 ID가 모두 일치하는 `deleted_at IS NULL` 알림만 처리한다.
-- 최초 ACK에서만 현재 시각을 `delivered_at`에 기록하고, 반복 ACK는 기존 시각을 반환한다.
+- 최초 ACK에서만 현재 시각을 `delivered_at`에 기록하고, 반복 ACK는 기존 시각을 유지한다.
+- ACK 응답은 저장된 전달 시각을 반환하지 않고 성공 여부만 전달한다.
 - 클라이언트가 `notificationId`를 이미 처리했더라도 화면에만 중복 노출하지 않고 ACK는 다시 호출한다.
 - 다른 사용자의 알림은 존재 여부를 노출하지 않도록 `404 NOTIFICATION_NOT_FOUND`로 응답한다.
 
@@ -287,10 +285,8 @@ request body는 사용하지 않는다.
 - DB 트랜잭션 커밋 후에만 `NOTI_GENERATED`로, 현재 작업의 미전달 알림 Publish 반복이 완료된 후에만 `DONE`으로 변경한다.
 - `DONE`은 사용자 수신 완료가 아니라 Redis Pub/Sub 발행 시도 완료를 의미한다.
 
-## 9. 알림 소프트 삭제
+## 9. 알림 삭제 정책
 
 - 사용자용 삭제 API는 제공하지 않는다.
-- 내부 정리 작업이 `created_at`으로부터 90일이 지난 알림의 `deleted_at`을 기록한다.
-- 소프트 삭제 작업이 재실행돼도 이미 삭제된 행의 `deleted_at`을 변경하지 않는다.
-- 소프트 삭제된 알림은 목록, 미읽음 수와 읽음 처리 대상에서 모두 제외한다.
-- 물리 삭제 시점은 현재 계약에 포함하지 않는다.
+- 생성 후 90일이 지난 알림을 자동 소프트 삭제하는 내부 작업은 구현하지 않는다.
+- 현재 구현은 `deleted_at IS NULL`인 알림만 목록, 미읽음 수와 읽음 처리 대상으로 사용하지만, `deleted_at`을 자동 기록하는 정책은 두지 않는다.
