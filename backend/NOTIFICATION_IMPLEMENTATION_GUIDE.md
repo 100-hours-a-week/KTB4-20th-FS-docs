@@ -26,7 +26,7 @@
 | 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `VERIFIED` | 3절, 6절 | `PRECHECKED` 결과로 D-1 여행·활성 참여자를 조회하고, 여행 기간·지역의 이상 기후 여부에 따라 사용자별 `TRIP_D1` 또는 `TRIP_WEATHER_ALERT` 하나를 UNIQUE Upsert로 저장한 뒤 `NOTI_GENERATED`로 전이. 반복 실행 멱등성 통합 테스트까지 통과 |
 | 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `IMPLEMENTED` | 6절, 7.1절 | 당일 미전달·미삭제 알림 조회, 내부 이벤트 변환, `planit:notifications` Publisher·Subscriber, `NOTI_GENERATED` 재개와 전체 Publish 성공 후 `DONE` 전이를 구현. 실제 Redis 다중 인스턴스 전달 검증은 #193에서 수행 |
 | 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `VERIFIED` | 7.2절 | 내부 Spring 이벤트를 사용자 전용 응답 DTO로 변환해 `/user/queue/notifications`로 라우팅. 인증 STOMP 연결·구독 `RECEIPT`·실제 수신과 서울 오프셋 보존을 통합 테스트로 검증 |
-| 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `NOT_STARTED` | API 명세 2~5절 | **다음 백엔드 구현 시작점.** 목록 Cursor 조회부터 구현한 뒤 미읽음 수·개별/전체 읽음 처리를 순차 구현 |
+| 7 | [#187 알림 조회·읽음 처리 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/187) | `IMPLEMENTED` | API 명세 2~5절 | Cursor 목록·미읽음 수 조회, 개별 읽음, 전체 읽음 API 구현 완료. `read_at` 동시 요청 순서는 보장하지 않고 최종 읽음 상태만 보장한다. Repository 쿼리·영속화는 MySQL 통합 테스트, Service·Controller는 단위 테스트 완료 |
 | 8 | [#189 알림 ACK 및 미전달 알림 복구 API](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/189) | `PARTIAL` | 7.3절, 8절 | 소유권·미삭제 조건의 멱등 `delivered_at` DB 처리는 구현·검증됨. pending 조회, Service·Controller·응답/오류 코드와 경합 테스트는 미구현 |
 | 9 | [#192 알림 소프트 삭제 및 운영 모니터링](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/192) | `NOT_STARTED` | API 명세 9절, 가이드 11절 | 90일 소프트 삭제와 로그·메트릭 구현 |
 | 10 | [#193 알림 생성·전송·복구 통합 테스트](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/193) | `PARTIAL` | 10절 전체 | #182 Upsert 동시성, #186 반복 생성 멱등성, #189 ACK 영속성은 검증됨. 전체 Precheck→생성→전송→복구 시나리오는 미구현 |
@@ -35,10 +35,10 @@
 
 ### 1.2 다음 세션 인계
 
-- 시작 이슈는 `#187`이다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
+- 시작 이슈는 `#189`이다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
 - `#188`은 내부 `NotificationPublishEvent`를 수신 사용자 전용 DTO로 변환해 `/user/queue/notifications`로 전송한다.
 - 알림 구독은 인증된 STOMP 연결에서 `receipt` 헤더를 받아 공통 `StompSubscriptionReceiptEvent`로 `RECEIPT` 프레임을 반환한다.
-- 첫 구현 단위는 `GET /api/notifications` 목록 Cursor 조회다. 미읽음 수와 개별·전체 읽음 처리는 이후 단위로 분리한다.
+- `#187`의 목록·미읽음 수·개별 읽음·전체 읽음 API는 구현됐다. 다음 구현 단위는 `#189`의 `GET /api/notifications/pending-deliveries`다.
 
 ## 2. 책임 분리
 
@@ -288,17 +288,25 @@ Redis JSON 저장 예시:
 4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이 (`VERIFIED`)
 5. `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이 (`IMPLEMENTED`)
 6. `#188` 사용자 WebSocket destination·인증·라우팅 (`VERIFIED`)
-7. **다음 시작점:** `#187` 알림 목록 Cursor 조회
-8. `#189` pending-deliveries·delivery-ack HTTP API
-9. `#192` 90일 소프트 삭제·운영 로그·메트릭
-10. `#193` 전체 생성·전송·복구 통합 테스트
-11. `#190`, `#191` 프론트엔드 전역 연결·상태 관리·UI
+7. `#187` 알림 목록 Cursor 조회 (`IMPLEMENTED`)
+8. `#187` 미읽음 알림 수 조회 (`IMPLEMENTED`)
+9. `#187` 개별 읽음 처리 (`IMPLEMENTED`)
+10. `#187` 전체 읽음 처리 (`IMPLEMENTED`)
+11. **다음 시작점:** `#189` pending-deliveries 조회
+12. `#189` delivery-ack HTTP API
+13. `#192` 90일 소프트 삭제·운영 로그·메트릭
+14. `#193` 전체 생성·전송·복구 통합 테스트
+15. `#190`, `#191` 프론트엔드 전역 연결·상태 관리·UI
 
 ## 10. 검증 체크리스트
 
 ### DB와 HTTP
 
 - [x] 동일 `dedupe_key`로 동시 생성해도 알림 행이 하나만 남는다. (`#182` 통합 테스트 완료)
+- [x] 알림 목록은 현재 사용자의 미삭제 알림을 `(created_at, id)` Cursor로 조회하고 최초 20개·이후 10개를 반환한다. (`#187` Repository MySQL 통합·Service·Controller 단위 테스트 완료)
+- [x] 미읽음 수는 현재 사용자의 `read_at IS NULL`, `deleted_at IS NULL` 알림만 계산한다. (`#187` Repository MySQL 통합·Service·Controller 단위 테스트 완료)
+- [x] 개별 읽음은 본인 미삭제 알림만 처리하고 순차 재요청에서 기존 `read_at`을 유지한다. 동시 요청 간 최초 시각 순서는 보장하지 않는다. (`#187` Repository MySQL 통합·Service·Controller 단위 테스트 완료)
+- [x] 전체 읽음은 현재 사용자의 미삭제·미읽음 알림만 같은 시각으로 일괄 갱신하고 반복 요청 시 `updatedCount=0`을 반환한다. (`#187` Repository MySQL 통합·Service·Controller 단위 테스트 완료)
 - [ ] Upsert 재실행이 기존 `read_at`, `delivered_at`, `created_at`을 변경하지 않는다.
 - [x] ACK DB 처리는 최초와 반복 요청 모두 최초 `delivered_at`을 유지한다. (`#189` 영속성 테스트 완료, HTTP API 미구현)
 - [ ] 다른 사용자의 ACK는 `404 NOTIFICATION_NOT_FOUND`다.
