@@ -23,7 +23,7 @@
 | ---: | --- | --- | --- | --- |
 | 1 | [#182 알림 도메인 모델 및 DB 스키마](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/182) | `IMPLEMENTED` | 2절, 3절 | Entity·Repository·V30·평문 `dedupe_key`·UNIQUE Upsert·동시성 테스트 구현. 기존 `read_at`, `delivered_at`, `deleted_at`이 값이 있는 상태에서도 Upsert 후 보존되는지 통합 테스트를 보강하면 `VERIFIED`로 전환 가능 |
 | 2 | [#184 AI 외부 요인 Precheck 연동 및 Redis 상태 관리](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/184) | `IMPLEMENTED` | 4절, 5.1절 | AI Client·응답 DTO, 키가 없을 때만 AI를 호출하는 오케스트레이션, Redis JSON 최초 생성·조회와 순차 조건부 상태 전이를 구현. Store는 JSON이 통합된 Redis 8에서, 연결 흐름은 단위 테스트로 검증 |
-| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `IMPLEMENTED` | 5절, 6절 | Redis 기반 ShedLock, 동일 워크플로를 호출하는 10:00·10:30 스케줄, 서울 기준 D+1 계산과 상태별 재개를 구현하고 단위 테스트 완료. 이슈 종료 전 두 번째 실행 최종 실패 로깅, 락 만료·실행시간 관측, 실제 다중 인스턴스 락·장애 복구 통합 검증이 필요 |
+| 3 | [#185 ShedLock 기반 알림 생성·장애 복구 스케줄러](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/185) | `VERIFIED` | 5절, 6절 | Redis 기반 ShedLock, 10:00·10:30 스케줄, 서울 기준 D+1 계산과 상태별 재개를 구현. 복구 최종 실패 로그, 실행시간·결과·락 최대시간 초과 메트릭을 추가하고 실제 Redis에서 두 실행기 락 경쟁과 `PRECHECKED`·`NOTI_GENERATED`·`DONE` 복구 통합 테스트 통과 |
 | 4 | [#186 여행 D-1 및 이상 기후 알림 생성](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/186) | `VERIFIED` | 3절, 6절 | `PRECHECKED` 결과로 D-1 여행·활성 참여자를 조회하고, 여행 기간·지역의 이상 기후 여부에 따라 사용자별 `TRIP_D1` 또는 `TRIP_WEATHER_ALERT` 하나를 UNIQUE Upsert로 저장한 뒤 `NOTI_GENERATED`로 전이. 반복 실행 멱등성 통합 테스트까지 통과 |
 | 5 | [#183 Redis Pub/Sub 기반 다중 인스턴스 알림 전달](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/183) | `IMPLEMENTED` | 6절, 7.1절 | 당일 미전달·미삭제 알림 조회, 내부 이벤트 변환, `planit:notifications` Publisher·Subscriber, `NOTI_GENERATED` 재개와 전체 Publish 성공 후 `DONE` 전이를 구현. 실제 Redis 다중 인스턴스 전달 검증은 #193에서 수행 |
 | 6 | [#188 사용자별 WebSocket 실시간 알림](https://github.com/100-hours-a-week/KTB4-20th-BE/issues/188) | `VERIFIED` | 7.2절 | 내부 Spring 이벤트를 사용자 전용 응답 DTO로 변환해 `/user/queue/notifications`로 라우팅. 인증 STOMP 연결·구독 `RECEIPT`·실제 수신과 서울 오프셋 보존을 통합 테스트로 검증 |
@@ -36,12 +36,13 @@
 
 ### 1.2 다음 세션 인계
 
-- 다음 백엔드 시작 이슈는 아직 열린 `#185`의 미완료 조건 보강이다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
+- 계획된 백엔드 알림 기능 구현은 완료됐다. `#183`의 Pub/Sub과 `#188`의 사용자별 WebSocket 전달은 변경하지 않는다.
 - `#188`은 내부 `NotificationPublishEvent`를 수신 사용자 전용 DTO로 변환해 `/user/queue/notifications`로 전송한다.
 - 알림 구독은 인증된 STOMP 연결에서 `receipt` 헤더를 받아 공통 `StompSubscriptionReceiptEvent`로 `RECEIPT` 프레임을 반환한다.
 - `#187`의 목록·미읽음 수·개별 읽음·전체 읽음 API와 `#189`의 pending 조회·ACK API는 구현·검증됐다.
-- `#185`는 스케줄과 상태별 재개 코드가 구현됐지만, 두 번째 실행 최종 실패 로깅, 락 만료·실행시간 관측, 실제 다중 인스턴스 락·장애 복구 통합 검증이 남아 있다.
+- `#185`는 두 번째 실행 최종 실패 로그, 실행시간·결과·락 최대시간 초과 메트릭, 실제 Redis 다중 실행기 락·상태별 복구 통합 검증까지 완료됐다.
 - 90일 자동 소프트 삭제는 구현하지 않는다. 프론트엔드는 다른 도구에서 진행한다.
+- 남은 `#193`은 전체 Precheck→생성→전송→복구 시나리오 검증이며 새로운 기능 구현 범위가 아니다.
 
 ## 2. 책임 분리
 
@@ -142,6 +143,10 @@ return 'CREATED'
 - AI 호출이 실패하면 Redis JSON을 생성하지 않고 예외·로그·메트릭을 남긴다.
 - 두 번째 실행도 실패하면 최종 장애로 기록하고 운영 감지 대상으로 삼는다.
 - 실행 시간이 `lockAtMostFor`를 초과하지 않는지 메트릭으로 검증한 후 필요하면 값을 늘린다.
+- 실행시간은 `planit.notification.workflow.duration` Timer에 `trigger`, `outcome` 태그로 기록한다.
+- 실행시간이 `PT5M` 이상이면 `planit.notification.workflow.lock_at_most_exceeded` Counter와 오류 로그를 기록한다.
+- 10:30 복구 실행이 실패하면 `planit.notification.workflow.recovery_failures` Counter와 대상일·예외를 포함한 최종 실패 로그를 기록한다.
+- Actuator `metrics` endpoint를 노출하며 애플리케이션 보안 정책에 따라 인증 후 조회한다.
 
 ```java
 @Scheduled(cron = "0 0 10 * * *", zone = "Asia/Seoul")
@@ -287,7 +292,7 @@ Redis JSON 저장 예시:
 
 1. `#182` Flyway·Notification Entity·Repository·UNIQUE Upsert
 2. `#184` AI `/precheck`·Redis JSON·상태 전이·TTL Lua Script
-3. `#185` Redis ShedLock과 10:00·10:30 스케줄 트리거·Precheck 재시도 (`IMPLEMENTED`)
+3. `#185` Redis ShedLock과 10:00·10:30 스케줄 트리거·Precheck 재시도 (`VERIFIED`)
 4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이 (`VERIFIED`)
 5. `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이 (`IMPLEMENTED`)
 6. `#188` 사용자 WebSocket destination·인증·라우팅 (`VERIFIED`)
@@ -297,8 +302,8 @@ Redis JSON 저장 예시:
 10. `#187` 전체 읽음 처리 (`IMPLEMENTED`)
 11. `#189` pending-deliveries 조회 (`VERIFIED`)
 12. `#189` delivery-ack HTTP API (`VERIFIED`)
-13. **다음 시작점:** `#185` 최종 실패 로깅·락 실행 관측·다중 인스턴스 및 장애 복구 검증
-14. `#193` 전체 생성·전송·복구 통합 테스트
+13. `#185` 최종 실패 로깅·락 실행 관측·다중 인스턴스 및 장애 복구 검증 (`VERIFIED`)
+14. **남은 검증:** `#193` 전체 생성·전송·복구 통합 테스트
 
 `#192`의 90일 자동 소프트 삭제는 구현하지 않는다. `#190`, `#191` 프론트엔드는 다른 도구에서 진행한다.
 
@@ -318,13 +323,13 @@ Redis JSON 저장 예시:
 
 ### 스케줄러와 Redis
 
-- [ ] 두 인스턴스가 동시 실행해도 하나만 ShedLock을 획득한다.
+- [x] 동일 Redis를 공유하는 두 실행기가 동시에 접근해도 하나만 ShedLock을 획득한다. (`#185` Redis 통합 테스트 완료)
 - [x] 서울 시각 `10:00` 첫 실행과 `10:30` 복구 실행이 같은 상태 머신과 락 이름을 사용한다. (`#185` 단위 테스트 완료)
 - [ ] AI 성공 후 Redis 저장 전 장애는 두 번째 실행에서 AI를 다시 호출한다.
-- [ ] `PRECHECKED` 장애는 알림 DB 생성부터 재개한다.
-- [ ] `NOTI_GENERATED` 장애는 Publish부터 재개한다.
-- [ ] `DONE`은 두 번째 실행에서 즉시 종료한다.
-- [ ] `lockAtMostFor` 초과 실행을 메트릭으로 감지한다.
+- [x] `PRECHECKED` 상태는 알림 DB 생성부터 재개한다. (`#185` Redis 통합 테스트 완료)
+- [x] `NOTI_GENERATED` 상태는 Publish부터 재개한다. (`#185` Redis 통합 테스트 완료)
+- [x] `DONE`은 후속 생성·발행 없이 종료한다. (`#185` Redis 통합 테스트 완료)
+- [x] `lockAtMostFor` 이상 실행을 Counter와 오류 로그로 감지한다. (`#185` 단위 테스트 완료)
 - [ ] 최초 Redis JSON 생성은 `CREATED`, 기존 키는 `ALREADY_EXISTS`를 반환한다.
 - [ ] Redis 오류 발생 시 후속 단계로 진행하지 않고 작업을 실패 처리한다.
 
@@ -339,7 +344,8 @@ Redis JSON 저장 예시:
 - [ ] publisher와 모든 subscriber가 소문자 `planit:notifications` 채널을 사용한다.
 - [ ] localStorage 항목은 수신 후 20시간에 만료되고 서비스 진입 시 일괄 정리된다.
 
-## 11. 아직 확인해야 할 값
+## 11. 운영 관측 기준
 
-- `#185` 두 번째 실행 최종 실패 로그의 필드와 운영 알림 연결 기준
-- `#185` 락 만료·실행시간 메트릭 이름과 경보 임계값
+- 10:30 복구 실행 최종 실패는 `planit.notification.workflow.recovery_failures`와 대상일·예외 로그로 확인한다.
+- 실행시간은 `planit.notification.workflow.duration`, 5분 이상 실행은 `planit.notification.workflow.lock_at_most_exceeded`로 확인한다.
+- 외부 알림 채널이나 Sentry 경보 연결은 배포 환경의 운영 설정에서 구성한다.

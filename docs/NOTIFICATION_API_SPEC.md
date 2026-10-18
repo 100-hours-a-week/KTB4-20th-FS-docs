@@ -39,8 +39,9 @@ Authorization: Bearer {accessToken}
       {
         "notificationId": "16001",
         "type": "TRIP_WEATHER_ALERT",
-        "title": "여행지에 많은 비가 예상돼요",
-        "body": "방장이 일정 변경 여부를 확인하고 있어요.",
+        "weatherCondition": "HEAVY_RAIN",
+        "title": "내일 폭우가 예상돼요",
+        "body": "Daniel님이 일정 변경 여부를 결정하고 있어요.",
         "target": {
           "type": "TRIP",
           "id": "1001",
@@ -73,6 +74,7 @@ Authorization: Bearer {accessToken}
 - 이동 대상이 만료되면 `target.status=EXPIRED`이며 `target.id`는 기존 값을 유지한다.
 - 이동 대상이 없는 안내 알림은 `target=null`이다.
 - 빈 목록은 `items=[]`, `nextCursor=null`, `hasNext=false`로 반환한다.
+- `weatherCondition`은 `TRIP_WEATHER_ALERT`에서 인식 가능한 날씨 사유가 있을 때만 값이 있고, 그 외에는 `null`이다. 값과 우선순위는 10절을 따른다.
 
 ## 3. 미읽음 알림 수
 
@@ -188,8 +190,13 @@ request body는 사용하지 않는다.
       {
         "notificationId": "16001",
         "type": "TRIP_WEATHER_ALERT",
-        "title": "여행지에 많은 비가 예상돼요",
-        "body": "여행 기간에 폭우가 예상됩니다.",
+        "weatherCondition": "HEAVY_RAIN",
+        "title": "내일 폭우가 예상돼요",
+        "body": "D-1, 경주 지역에 폭우가 예보되었어요. 일정을 변경할까요?",
+        "target": {
+          "type": "TRIP",
+          "id": "1001"
+        },
         "createdAt": "2026-10-13T10:00:00.123456+09:00"
       }
     ]
@@ -249,9 +256,10 @@ request body는 사용하지 않는다.
 
 - 클라이언트는 로그인 후 서비스 진입 시점에 WebSocket을 연결하고 `/user/queue/notifications`를 구독한다.
 - Redis Pub/Sub 채널명은 소문자 `planit:notifications`로 고정하며, publisher와 모든 subscriber가 정확히 같은 값을 사용한다.
-- Redis 내부 이벤트는 `recipientPublicId`, `notificationId`, `notificationType`, `title`, `body`, `createdAt`을 포함한다.
+- Redis 내부 이벤트는 `recipientPublicId`, `notificationId`, `notificationType`, `weatherCondition`, `title`, `body`, `target`, `createdAt`을 포함한다.
 - 각 인스턴스는 Redis 이벤트를 구독하고, 자신이 보유한 WebSocket 연결에 수신 사용자가 있을 때만 사용자 destination으로 이벤트를 전송한다.
-- WebSocket 응답은 내부 라우팅용 `recipientPublicId`를 제외하고 `notificationId`, `notificationType`, `title`, `body`, `createdAt`을 반환한다.
+- WebSocket 응답은 내부 라우팅용 `recipientPublicId`를 제외하고 `notificationId`, `notificationType`, `weatherCondition`, `title`, `body`, `target`, `createdAt`을 반환한다.
+- 실시간·미전달 알림의 `target`은 이동 대상의 `type`, `id`만 포함한다. 당일 알림만 전달되므로 만료 상태는 포함하지 않는다.
 - 사용자 단위 연결 중 하나의 클라이언트 ACK를 전달 완료로 간주한다.
 - 클라이언트는 `notification:{userPublicId}:{notificationId}` 키를 수신 시각으로부터 20시간 후인 `expiredAt`과 함께 localStorage에 저장해 중복 화면 노출을 방지한다.
 - localStorage에 이미 있는 알림은 화면에 다시 표시하지 않지만, 이전 ACK 실패를 복구하기 위해 ACK API는 다시 호출한다.
@@ -263,8 +271,13 @@ request body는 사용하지 않는다.
 {
   "notificationId": "16001",
   "notificationType": "TRIP_WEATHER_ALERT",
-  "title": "여행지에 많은 비가 예상돼요",
-  "body": "여행 기간에 폭우가 예상됩니다.",
+  "weatherCondition": "HEAVY_RAIN",
+  "title": "내일 폭우가 예상돼요",
+  "body": "D-1, 경주 지역에 폭우가 예보되었어요. 일정을 변경할까요?",
+  "target": {
+    "type": "TRIP",
+    "id": "1001"
+  },
   "createdAt": "2026-10-13T10:00:00.123456+09:00"
 }
 ```
@@ -290,3 +303,30 @@ request body는 사용하지 않는다.
 - 사용자용 삭제 API는 제공하지 않는다.
 - 생성 후 90일이 지난 알림을 자동 소프트 삭제하는 내부 작업은 구현하지 않는다.
 - 현재 구현은 `deleted_at IS NULL`인 알림만 목록, 미읽음 수와 읽음 처리 대상으로 사용하지만, `deleted_at`을 자동 기록하는 정책은 두지 않는다.
+
+## 10. 알림 문구와 날씨 조건
+
+알림은 수신자별로 저장하며 문구는 여행 지역 이름(`regions.name`)과 수신자 역할로 만든다.
+
+| 유형 | 수신자 | 제목 | 본문 |
+| --- | --- | --- | --- |
+| `TRIP_D1` | 전체 | `{지역} 여행이 내일 시작돼요` | `D-1, 준비물과 일정을 미리 확인해보세요.` |
+| `TRIP_WEATHER_ALERT` | 방장 | `내일 {날씨}이/가 예상돼요` | `D-1, {지역} 지역에 {날씨}이/가 예보되었어요. 일정을 변경할까요?` |
+| `TRIP_WEATHER_ALERT` | 멤버 | `내일 {날씨}이/가 예상돼요` | `{방장 이름}님이 일정 변경 여부를 결정하고 있어요.` |
+
+- `weatherCondition`은 `notifications.weather_condition`에 저장한다. AI precheck 사유 `detail`을 대소문자 구분 없이 아래 값으로 변환한다.
+- 여러 사유가 있으면 아래 표의 위쪽 값 하나만 사용한다. 인식할 수 없는 값만 있으면 `null`로 저장하고 날씨 이름은 `특이 기상`으로 표시한다.
+
+| 우선순위 | `weatherCondition` | 표시 이름 |
+| ---: | --- | --- |
+| 1 | `TYPHOON` | 태풍 |
+| 2 | `HEAVY_RAIN` | 폭우 |
+| 3 | `HEAVY_SNOW` | 폭설 |
+| 4 | `HEAT` | 폭염 |
+| 5 | `COLD` | 한파 |
+| 6 | `RAIN` | 비 |
+| 7 | `YELLOW_DUST` | 황사 |
+| 8 | `FINE_DUST` | 미세먼지 |
+
+- 날씨 분류는 AI precheck 계약이 확정되면 변경될 수 있다.
+- 방장의 일정 변경 선택은 [`SCHEDULE_API_SPEC.md`](./SCHEDULE_API_SPEC.md) 4절의 `reason=WEATHER` 재생성으로 처리하고, 일정 유지는 별도 API 없이 클라이언트에서 처리한다.
