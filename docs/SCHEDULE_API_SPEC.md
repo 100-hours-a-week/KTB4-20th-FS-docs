@@ -350,7 +350,7 @@ V1에서는 AI 장소 추천과 백엔드 동선 계산의 책임을 분리한�
 - 장소 5개 이상 수신과 검증이 끝난 후 동선을 계산하고, 계산된 일정·Day 1·방문 장소 전체·이동 구간(장소 수 - 1개)을 하나의 트랜잭션으로 저장한다.
 - 일부 데이터만 저장된 일정은 허용하지 않는다. 거리 계산이나 저장에 실패하면 일정 전체를 롤백한다.
 - 생성된 일정은 별도의 후보 선택 없이 해당 여행의 `ACTIVE`, `SHORTEST` 일정이 된다.
-- V1에서는 복수 후보, 사용자 재생성, 진행 상태 조회, 날씨 기반 재생성과 일정 실시간 수정 기능을 제공하지 않는다.
+- V1에서는 복수 후보, 진행 상태 조회와 일정 실시간 수정 기능을 제공하지 않는다. 기존 일정을 대체하는 재생성은 아래 4절 계약을 따른다.
 
 ### 2. V1 일정 동기 생성
 
@@ -470,6 +470,7 @@ V1에서는 AI 장소 추천과 백엔드 동선 계산의 책임을 분리한�
     "editable": false,
     "totalDistanceMeters": 12100,
     "createdAt": "2026-09-07T18:00:03.123456+09:00",
+    "remainingRegenerations": 5,
     "days": [
       {
         "dayId": "7101",
@@ -535,6 +536,62 @@ V1에서는 AI 장소 추천과 백엔드 동선 계산의 책임을 분리한�
 - 클라이언트는 각 장소의 좌표를 방문 순서대로 직선 연결해 지도의 동선을 표시한다.
 - V1 일정은 수정할 수 없으므로 `editable`은 항상 `false`다.
 
+- `remainingRegenerations`는 날씨 사유를 제외한 일반 재생성의 남은 횟수(0~5)다.
+
+### 4. 일정 생성·재생성
+
+#### 기본 정보
+
+| 항목 | 내용 |
+| --- | --- |
+| 상태 | `IMPLEMENTED` |
+| Method | `POST` |
+| URL | `/api/trips/{tripId}/schedule-generation` |
+| 설명 | AI 장소 선정과 동선 계산으로 일정을 만든다. 확정 일정이 있으면 새 일정으로 대체한다. |
+| 인증 | Access Token 필수 |
+| 인가 | 해당 여행방의 현재 방장 |
+
+#### 요청
+
+```json
+{
+  "reason": "WEATHER"
+}
+```
+
+- body는 선택이다. body나 `reason`을 생략하면 `GENERAL`로 처리한다.
+- `reason`은 `GENERAL`, `WEATHER` 중 하나다.
+
+#### 생성 방식 판정
+
+| 확정 일정 | `reason` | 방식 | 재생성 횟수 |
+| --- | --- | --- | --- |
+| 없음 | `GENERAL` | 최초 생성 | 차감하지 않음 |
+| 있음 | `GENERAL` | 일반 재생성 | 성공 시 1회 차감 |
+| 있음 | `WEATHER` | 날씨 재생성 | 차감하지 않음 |
+| 없음 | `WEATHER` | 거부 | - |
+
+| HTTP 상태 | API 코드 | 조건 |
+| ---: | --- | --- |
+| `200 OK` | `SCHEDULE_PLACE_SELECTION_COMPLETED` | 일정 생성 또는 대체 완료 |
+| `403 Forbidden` | `TRIP_HOST_REQUIRED` | 현재 방장이 아님 |
+| `404 Not Found` | `TRIP_NOT_FOUND` | 여행방이 없거나 소프트 삭제됨 |
+| `409 Conflict` | `SCHEDULE_GENERATION_NOT_READY` | 설문 마감 전이고 모든 활성 멤버가 제출하지 않음 |
+| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 재생성 요청이지만 서울 날짜 기준 여행이 이미 시작됨 |
+| `409 Conflict` | `SCHEDULE_REGENERATION_LIMIT_EXCEEDED` | 일반 재생성 5회를 모두 사용함 |
+| `409 Conflict` | `WEATHER_REPLAN_NOT_AVAILABLE` | 대체할 확정 일정이 없거나 현재 시작일 기준 이상 기후 알림이 없음 |
+| `409 Conflict` | `SCHEDULE_ALREADY_EXISTS` | 최초 생성 요청과 동시에 다른 요청이 일정을 먼저 만든 경우 |
+| `503 Service Unavailable` | `AI_SCHEDULE_GENERATION_FAILED` | AI 장소 선정 호출 실패 |
+
+#### 처리 규칙
+
+- 일반 재생성은 여행별 최대 5회이며 최초 생성은 횟수에 포함하지 않는다. 횟수는 `trips.schedule_regeneration_count`에 저장한다.
+- 날씨 재생성은 해당 여행에 현재 시작일 D-1 이후 생성된 `TRIP_WEATHER_ALERT` 알림이 있을 때만 허용하며 횟수를 차감하지 않는다.
+- 재생성은 서울 날짜 기준 여행 시작일 전까지만 허용한다.
+- 날씨 재생성도 일반 생성과 같은 AI 장소 선정 요청을 다시 보낸다. 날씨 반영은 AI 서버의 책임이다.
+- 판정은 AI 호출 전에 수행하고, 저장 시 여행 행을 잠근 상태에서 다시 검사한다. 기존 일정·Day·방문 장소·이동 구간을 삭제한 뒤 새 일정을 같은 트랜잭션으로 저장하며, 실패하면 기존 일정과 횟수를 유지한다.
+- "그대로 둘게요"처럼 기존 일정을 유지하는 결정은 별도 API 없이 클라이언트에서 처리한다.
+
 ## 5. FastAPI 일정 생성 입력
 
 이 항목은 사용자용 API가 아니라 Spring 서버가 AI 일정 생성 작업을 시작할 때 FastAPI 서버로 전달해야 하는 내부 입력 계약이다. 실제 내부 URL과 인증 방식은 배포 구조를 확정할 때 정한다.
@@ -598,8 +655,10 @@ V1에서는 AI 장소 추천과 백엔드 동선 계산의 책임을 분리한�
 
 ### 일정 변경 가능 시점
 
-- 방장은 서울 시각 기준 여행 시작 전날 `23:59:59.999999`까지만 다른 후보를 확정하거나 확정 일정의 장소를 추가·삭제할 수 있다.
-- 여행 시작일 `00:00:00`부터는 후보 재확정과 장소 추가·삭제를 허용하지 않는다.
+- 방장은 서울 시각 기준 여행 시작 전날 `23:50:00` 전까지만 다른 후보를 확정하거나 확정 일정의 장소를 추가·삭제할 수 있다.
+- 여행 시작 전날 `23:50:00`부터는 후보 확정·재확정과 장소 추가·삭제를 허용하지 않는다.
+- 매일 `23:50:00`에 다음 날 시작하는 여행 중 `ACTIVE` 확정 일정이 없는 여행방을 소프트 삭제한다. 후보를 생성하지 않은 여행과 후보만 있고 확정하지 않은 여행을 모두 포함한다.
+- 자동 삭제 시 모든 활성 멤버십을 같은 시각에 종료하고 후보 일정과 그 하위 Day·장소·이동 구간을 함께 정리한다. 진행 중인 AI 생성 작업은 취소하지 않지만 완료 결과를 삭제된 여행방에 반영하지 않는다.
 - 확정 일정의 장소 추가·삭제는 사용자가 방문 경로를 직접 커스텀하기 위한 기능이다. FastAPI를 호출하거나 AI가 장소를 추천·재배치하지 않는다.
 - 장소는 선택한 Day의 처음, 두 장소 사이 또는 마지막에 삽입할 수 있다. 별도 순서 변경과 Day 간 장소 이동 기능은 제공하지 않는다.
 - 수동 추가·삭제에는 음식점·카페 배치 제약을 적용하지 않는다.
@@ -659,7 +718,7 @@ Location: /api/schedule-generation-jobs/4001
 | `409 Conflict` | `SCHEDULE_GENERATION_IN_PROGRESS` | 같은 여행방의 생성 작업이 이미 실행 중임 |
 | `409 Conflict` | `SCHEDULE_ALREADY_CONFIRMED` | 일정이 이미 확정되어 일반 재생성을 요청할 수 없음 |
 | `409 Conflict` | `SCHEDULE_GENERATION_LIMIT_EXCEEDED` | 사용자 재생성 3회를 모두 사용함 |
-| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 서울 날짜 기준 여행이 이미 시작됨 |
+| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 여행 시작 전날 23:50 이후이거나 여행이 시작되어 변경할 수 없음 |
 | `409 Conflict` | `IDEMPOTENCY_KEY_REUSED` | 같은 Key를 다른 요청 내용에 사용함 |
 | `409 Conflict` | `IDEMPOTENCY_REQUEST_IN_PROGRESS` | 같은 Key의 요청이 아직 처리 중임 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
@@ -845,13 +904,13 @@ Location: /api/schedule-generation-jobs/4001
 | `404 Not Found` | `TRIP_NOT_FOUND` | 여행방이 없거나 소프트 삭제됨 |
 | `404 Not Found` | `SCHEDULE_CANDIDATE_NOT_FOUND` | 후보가 없거나 해당 여행방 후보가 아님 |
 | `410 Gone` | `SCHEDULE_CANDIDATES_SUPERSEDED` | 최신 성공 작업의 후보가 아님 |
-| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 여행 시작일이 되어 확정할 수 없음 |
+| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 여행 시작 전날 23:50 이후이거나 여행이 시작되어 확정할 수 없음 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
 
 ### 처리 규칙
 
 - 가장 최근에 성공한 일반 생성 작업의 후보 3개 중 하나만 확정할 수 있다.
-- 서울 시각 기준 여행 시작 전날 `23:59:59.999999`까지만 확정·재확정할 수 있다.
+- 서울 시각 기준 여행 시작 전날 `23:50:00` 전까지만 확정·재확정할 수 있다.
 - 처음 확정하면 선택한 후보를 `ACTIVE`로 변경한다.
 - 다른 후보를 재확정하면 기존 `ACTIVE` 일정을 `SUPERSEDED`, 새 일정을 `ACTIVE`로 변경한다.
 - 같은 `scheduleId`가 이미 `ACTIVE`이면 상태와 `confirmedAt`을 바꾸지 않고 현재 결과를 반환한다.
@@ -951,7 +1010,7 @@ Location: /api/schedule-generation-jobs/4001
 - `source=AI`이면 FastAPI가 제공해 저장한 `selectionReason`을 반환한다. `source=MANUAL`이면 `selectionReason`은 `null`이다.
 - 거리 합계는 현재 활성 `schedule_legs.distance_meters`의 합계다. 이동수단, 예상 소요 시간과 도로 경로 polyline은 제공하지 않는다.
 - 클라이언트는 각 장소의 좌표를 방문 순서대로 직선 연결해 지도의 동선을 표시한다.
-- `editable`은 요청 사용자가 현재 방장이고 서울 시각 기준 여행 시작 전날 `23:59:59.999999` 이전일 때만 `true`다. 실제 변경 API에서도 같은 권한과 시점을 다시 검증한다.
+- `editable`은 요청 사용자가 현재 방장이고 서울 시각 기준 여행 시작 전날 `23:50:00` 이전일 때만 `true`다. 실제 변경 API에서도 같은 권한과 시점을 다시 검증한다.
 
 ## 11. 확정 일정 장소 추가
 
@@ -1027,7 +1086,7 @@ Location: /api/schedule-generation-jobs/4001
 | `404 Not Found` | `ACTIVE_SCHEDULE_NOT_FOUND` | 확정 일정이 없음 |
 | `404 Not Found` | `SCHEDULE_DAY_NOT_FOUND` | Day가 현재 확정 일정에 속하지 않음 |
 | `404 Not Found` | `PLACE_NOT_FOUND` | 저장된 장소가 없음 |
-| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 서울 날짜 기준 여행이 이미 시작됨 |
+| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 여행 시작 전날 23:50 이후이거나 여행이 시작되어 변경할 수 없음 |
 | `409 Conflict` | `SCHEDULE_MAXIMUM_STOPS_EXCEEDED` | 추가하면 일정 전체 장소가 20개를 초과함 |
 | `409 Conflict` | `SCHEDULE_PLACE_ALREADY_EXISTS` | 같은 일정에 동일 장소가 이미 포함됨 |
 | `409 Conflict` | `IDEMPOTENCY_KEY_REUSED` | 같은 Key를 다른 요청 내용에 사용함 |
@@ -1085,7 +1144,7 @@ Location: /api/schedule-generation-jobs/4001
 | `403 Forbidden` | `TRIP_HOST_REQUIRED` | 현재 방장이 아님 |
 | `404 Not Found` | `TRIP_NOT_FOUND` | 여행방이 없거나 소프트 삭제됨 |
 | `404 Not Found` | `SCHEDULE_STOP_NOT_FOUND` | 장소가 없거나 현재 확정 일정에 속하지 않음 |
-| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 서울 날짜 기준 여행이 이미 시작됨 |
+| `409 Conflict` | `SCHEDULE_CHANGE_NOT_ALLOWED` | 여행 시작 전날 23:50 이후이거나 여행이 시작되어 변경할 수 없음 |
 | `409 Conflict` | `SCHEDULE_MINIMUM_STOPS_REQUIRED` | 삭제하면 일정 전체 장소가 3개 미만이 됨 |
 | `500 Internal Server Error` | `INTERNAL_SERVER_ERROR` | 예상하지 못한 서버 내부 오류 |
 
