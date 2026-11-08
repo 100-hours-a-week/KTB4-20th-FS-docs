@@ -815,6 +815,8 @@ Location: /api/schedule-generation-jobs/4001
         "scheduleId": "7001",
         "strategy": "SHORTEST",
         "summary": "이동거리를 줄인 일정",
+        "preferenceCount": null,
+        "discoveryCount": null,
         "totalDistanceMeters": 12500,
         "days": [
           {
@@ -839,7 +841,14 @@ Location: /api/schedule-generation-jobs/4001
 }
 ```
 
-실제 성공 응답의 `candidates`는 `SHORTEST`, `PREFERENCE`, `BALANCED`를 각각 하나씩 포함해 정확히 3개다. `legs` 항목은 `legId`, `fromStopId`, `toStopId`, `order`, `distanceMeters`를 반환한다. 이동수단과 예상 소요 시간은 제공하지 않는다.
+실제 성공 응답의 `candidates`는 `SHORTEST`, `PREFERENCE`, `DIVERSITY`를 각각 하나씩 포함해 정확히 3개다.
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| `preferenceCount` | `number \| null` | 그룹 취향으로 고른 장소 수. `SHORTEST`는 `null` |
+| `discoveryCount` | `number \| null` | 새로 발견하도록 고른 장소 수. `SHORTEST`는 `null` |
+
+프론트엔드는 `PREFERENCE` 후보를 "취향 우선 코스"로 표시하고 취향 반영도를 `preferenceCount / (preferenceCount + discoveryCount)`로, `DIVERSITY` 후보를 "다양성 코스"로 표시하고 다양성 반영도를 `discoveryCount / (preferenceCount + discoveryCount)`로 계산해 백분율로 보여 준다. `legs` 항목은 `legId`, `fromStopId`, `toStopId`, `order`, `distanceMeters`를 반환한다. 이동수단과 예상 소요 시간은 제공하지 않는다.
 
 | HTTP 상태 | API 코드 | 조건 |
 | ---: | --- | --- |

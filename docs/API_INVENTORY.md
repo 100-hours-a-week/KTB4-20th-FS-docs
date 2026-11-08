@@ -218,7 +218,7 @@ HTTP는 방·정책·참여·과거 이력·이미지 업로드를 담당하고 
 | 당일 미전달 알림 | `GET` | `/api/notifications/pending-deliveries` | 알림 채널 구독 후 당일 미전달 날씨·D-1 알림 복구 | Access Token 본인 | `APPROVED` |
 | 알림 수신 ACK | `PUT` | `/api/notifications/{notificationId}/delivery-ack` | 화면 반영을 완료한 알림의 `delivered_at`을 멱등 기록 | Access Token 본인 | `APPROVED` |
 
-날씨 조회, 알림 생성, `dedupe_key` 중복 방지와 Redis Pub/Sub 발행은 서버 내부 작업이다. 외부 AI `/precheck`는 서울 시각 `10:00` 첫 스케줄과 `10:30` 장애 복구 스케줄에서 실행 상태에 따라 스케줄당 1회 호출하며, 두 번째 실행은 Redis 상태를 보고 미완료 단계만 재실행한다. 푸시 알림은 동의·발송 정책이 정해지지 않아 목록에서 제외했다.
+날씨 조회, 알림 생성, `dedupe_key` 중복 방지와 Redis Pub/Sub 발행은 서버 내부 작업이다. 외부 AI `/trips/precheck`는 서울 시각 `10:00` 첫 스케줄과 `10:30` 장애 복구 스케줄에서 실행 상태에 따라 스케줄당 1회 호출하며, 두 번째 실행은 Redis 상태를 보고 미완료 단계만 재실행한다. 푸시 알림은 동의·발송 정책이 정해지지 않아 목록에서 제외했다.
 
 ### 9.1 실시간 알림 인터페이스
 
@@ -236,7 +236,7 @@ WebSocket 전달은 at-least-once 시도로 취급한다. 클라이언트는 `no
 
 | 내부 작업 | 근거 | 향후 계약 |
 | --- | --- | --- |
-| D-1 외부 요인 조회 실행 | AI `/precheck`·Redis JSON 상태 | ShedLock 스케줄러와 장애 복구용 두 번째 실행 |
+| D-1 외부 요인 조회 실행 | AI `/trips/precheck`·Redis JSON 상태 | ShedLock 스케줄러와 장애 복구용 두 번째 실행 |
 | AI 일정 생성 실행·재시도 | `schedule_generation_jobs` | 비동기 작업 큐와 worker |
 | V1 AI 장소 추천 호출 | 별도 AI 연동 컴포넌트 | 동기 일정 생성 흐름에서 장소 6개를 동선 계산 컴포넌트에 전달 |
 | 일별 포토 미션 생성 실행 | `mission_generation_jobs` | 비동기 작업 큐와 worker |

@@ -127,7 +127,7 @@ return 'CREATED'
 
 | 상태 | 완료 조건 | 다음 실행 |
 | --- | --- | --- |
-| 키 없음 | AI `/precheck` 미실행 또는 실패 | AI `/precheck` 1회 호출 |
+| 키 없음 | AI `/trips/precheck` 미실행 또는 실패 | AI `/trips/precheck` 1회 호출 |
 | `PRECHECKED` | AI 응답과 결과 JSON 저장 완료 | 알림 대상 산출과 DB 저장 |
 | `NOTI_GENERATED` | 모든 대상 알림 DB 커밋 완료 | 미전달 알림 Redis Pub/Sub 발행 |
 | `DONE` | 현재 작업의 Pub/Sub 발행 시도 완료 | 작업 종료 |
@@ -139,7 +139,7 @@ return 'CREATED'
 - 첫 실행은 매일 `10:00`, 장애 복구용 두 번째 실행은 매일 `10:30`에 `Asia/Seoul` 기준으로 예약한다.
 - 두 실행은 동일한 상태 머신 메서드와 ShedLock 이름 `tripRemindNotificationWorkflow`를 사용한다.
 - 초기 값은 `lockAtMostFor=PT5M`, `lockAtLeastFor=PT1M`으로 설정한다.
-- AI `/precheck`는 스케줄 실행당 1회만 호출하고 `@Retryable`을 사용하지 않는다.
+- AI `/trips/precheck`는 스케줄 실행당 1회만 호출하고 `@Retryable`을 사용하지 않는다.
 - AI 호출이 실패하면 Redis JSON을 생성하지 않고 예외·로그·메트릭을 남긴다.
 - 두 번째 실행도 실패하면 최종 장애로 기록하고 운영 감지 대상으로 삼는다.
 - 실행 시간이 `lockAtMostFor`를 초과하지 않는지 메트릭으로 검증한 후 필요하면 값을 늘린다.
@@ -162,16 +162,17 @@ public void executeTripRemindNotificationWorkflow() {
 }
 ```
 
-### 5.1 AI `/precheck` 계약
+### 5.1 AI `/trips/precheck` 계약
 
-- 요청은 `GET ${AI_BASE_URL}/precheck`다.
+- 요청은 `POST ${AI_BASE_URL}/trips/precheck`다.
 - request body와 query parameter는 사용하지 않는다.
 - `X-Internal-Token: ${AI_INTERNAL_API_KEY}` 헤더만 추가한다.
 - 스케줄 실행당 한 번만 요청하며 `@Retryable`은 사용하지 않는다.
 - HTTP 200이 아니거나, body가 없거나, 아래 응답 구조로 역직렬화할 수 없으면 해당 실행을 실패 처리하고 Redis JSON을 생성하지 않는다.
 - `generated_at`은 UTC ISO-8601 시각이다.
-- `forecasts`에는 `generated_at`의 서울 날짜를 기준으로 다음 날(`D+1`)부터 9일 후(`D+9`)까지 날짜순으로 정확히 9개 항목이 포함된다.
+- `forecasts`에는 `generated_at`의 서울 날짜를 기준으로 다음 날(`D+1`)부터 9일 후(`D+9`)까지 수집에 성공한 날짜가 날짜순으로 포함된다.
 - `region`은 `REGION-SEOUL`, `REGION-GYEONGJU`, `REGION-BUSAN`, `REGION-JEONJU`, `REGION-JEJU`와 같은 백엔드 기준 지역 코드를 사용한다.
+- 수집에 실패해 응답에서 누락된 날짜·지역은 백엔드에서 날씨 이상 없음으로 판정한다.
 - 날씨 제약은 날짜·지역 단위로 표현하며, 일정 재생성은 이 응답을 사용하는 별도 AI 흐름의 책임이다.
 
 AI 응답 예시:
@@ -207,7 +208,7 @@ AI 응답 예시:
 }
 ```
 
-위 예시는 첫 날짜만 축약해 표시하며 실제 응답에는 `D+1`부터 `D+9`까지 9개 날짜 항목이 있어야 한다.
+위 예시는 수집에 성공한 첫 날짜만 표시한다. 실제 응답에는 `D+1`부터 `D+9`까지 수집에 성공한 날짜·지역만 포함되며, 누락된 날짜·지역은 날씨 이상 없음으로 판정한다.
 
 Redis JSON 저장 예시:
 
@@ -291,7 +292,7 @@ Redis JSON 저장 예시:
 ## 9. 이슈 기준 구현 순서
 
 1. `#182` Flyway·Notification Entity·Repository·UNIQUE Upsert
-2. `#184` AI `/precheck`·Redis JSON·상태 전이·TTL Lua Script
+2. `#184` AI `/trips/precheck`·Redis JSON·상태 전이·TTL Lua Script
 3. `#185` Redis ShedLock과 10:00·10:30 스케줄 트리거·Precheck 재시도 (`VERIFIED`)
 4. `#186` D-1·이상 기후 대상 산출·알림 생성·`NOTI_GENERATED` 전이 (`VERIFIED`)
 5. `#183` Redis Pub/Sub publisher·subscriber·`DONE` 전이 (`IMPLEMENTED`)

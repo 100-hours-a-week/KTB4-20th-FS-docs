@@ -148,9 +148,11 @@ CREATE TABLE schedule_versions (
     confirmed_by_member_id BIGINT UNSIGNED NULL COMMENT '일정을 확정한 방장 멤버십 ID',
     version_no INT UNSIGNED NOT NULL COMMENT '여행방 내 일정 버전 번호',
     version_type VARCHAR(20) NOT NULL COMMENT 'CANDIDATE, CONFIRMED',
-    strategy VARCHAR(30) NOT NULL COMMENT 'SHORTEST, PREFERENCE, BALANCED, WEATHER_ALTERNATIVE, MANUAL_EDIT',
+    strategy VARCHAR(30) NOT NULL COMMENT 'SHORTEST, PREFERENCE, DIVERSITY, WEATHER_ALTERNATIVE, MANUAL_EDIT',
     status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT, ACTIVE, SUPERSEDED',
     active_confirmed_slot TINYINT UNSIGNED NULL COMMENT '현재 확정 일정일 때만 1',
+    preference_count INT NULL COMMENT 'AI 추천 경로의 취향 장소 수. SHORTEST는 NULL',
+    discovery_count INT NULL COMMENT 'AI 추천 경로의 발견 장소 수. SHORTEST는 NULL',
     summary VARCHAR(500) NULL COMMENT '후보 일정 요약',
     confirmed_at DATETIME(6) NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -162,7 +164,7 @@ CREATE TABLE schedule_versions (
     CONSTRAINT chk_schedule_versions_type
         CHECK (version_type IN ('CANDIDATE', 'CONFIRMED')),
     CONSTRAINT chk_schedule_versions_strategy
-        CHECK (strategy IN ('SHORTEST', 'PREFERENCE', 'BALANCED', 'WEATHER_ALTERNATIVE', 'MANUAL_EDIT')),
+        CHECK (strategy IN ('SHORTEST', 'PREFERENCE', 'DIVERSITY', 'WEATHER_ALTERNATIVE', 'MANUAL_EDIT')),
     CONSTRAINT chk_schedule_versions_status
         CHECK (status IN ('DRAFT', 'ACTIVE', 'SUPERSEDED')),
     CONSTRAINT chk_schedule_versions_active
