@@ -23,13 +23,14 @@
 
 ```text
 com.planit.mq
-├── config        // RabbitMqProperties, RabbitTopologyConfig, ListenerConfig
-├── outbox        // MessageOutbox, MessageOutboxRepository, OutboxPublisher, OutboxFailureHandler, MessageOutboxRelayScheduler, MessageOutboxCleanupScheduler
-├── job           // AiJobType, AiJobAcceptance(차단 플래그 확인), StaleJobChecker, AiJobFailureService
-├── monitor       // MessageQueueMonitorScheduler, RabbitManagementClient
-├── result        // AiResultListener, AiResultEnvelope, 작업별 ResultHandler
-├── dlq           // AiDlqListener, PhotoMissionDlqReprocessor
-└── message       // AiRequestEnvelope, AiMessageHeaders, AiMessageFactory
+├── config        // RabbitMqProperties, RabbitMqConfig, RabbitTopologyConfig
+├── outbox        // MessageOutbox, MessageOutboxRepository, OutboxService, OutboxPublisher, OutboxPublishResultHandler, OutboxFailureService, MessageOutboxRelayScheduler, MessageOutboxCleanupScheduler
+├── job           // AiJobType, AiJobTerminationService(공통 종료), GenerationJobPublishFailureListener, StaleJobChecker, StaleJobFailureService
+├── intake        // AiJobIntakeGuard(전환·차단 플래그 확인), AiJobAcceptedResponse
+├── monitor       // MessageQueueMonitorScheduler, MessageQueueMonitor, RabbitManagementClient
+├── result        // AiResultListener, AiResultEnvelopeParser, AiResultRepublisher, ScheduleGenerationResultHandler, MissionGenerationResultHandler
+├── dlq           // AiDlqListener, PhotoMissionGenerationDlqReprocessor
+└── message       // AiRequestEnvelope, AiRequestMessageWriter
 ```
 
 ---
@@ -76,21 +77,22 @@ planit:
       failed-retention: 30d
       cleanup:
         delete-batch-size: 1000
-    stale:
-      schedule-generate: 28m
-      photo-judge: 16m
-      photo-mission-generate-cutoff: "06:00"
     monitor:
       management-base-url: ${RABBITMQ_MANAGEMENT_URL:http://localhost:15672}
+      virtual-host: ${spring.rabbitmq.virtual-host}
       username: ${RABBITMQ_MONITOR_USERNAME:planit-monitor}
       password: ${RABBITMQ_MONITOR_PASSWORD}
+      connect-timeout: 300ms
+      read-timeout: 500ms
       task-block-ratio: 0.95
       task-unblock-ratio: 0.50
       dlq-block-ratio: 0.90
       dlq-unblock-ratio: 0.50
 ```
 
-`@ConfigurationProperties(prefix = "planit.mq")` record `RabbitMqProperties`로 읽는다.
+`@ConfigurationProperties(prefix = "planit.mq")` record `RabbitMqProperties`로 읽는다. 큐 감시와 접수 설정은 `MessageQueueMonitorProperties`, `AiJobIntakeProperties`로 따로 읽는다.
+
+Stale 기준 시간(일정 생성 28분, 포토미션 생성 06:00)은 설정이 아니라 코드 상수다. 요청 메시지 `deadlineAt`과 같은 값이어야 하므로 접수 코드와 `StaleJobChecker`에 함께 둔다.
 
 ### 1.3 스케줄러 스레드
 
@@ -105,8 +107,8 @@ scheduler.setPoolSize(properties.schedulerPoolSize()); // = 앱 전체 @Schedule
 Publisher confirm은 Spring AMQP 연결 스레드가 `CorrelationData`의 Future를 완료한다. 연결 스레드에서 DB 작업을 하면 다음 confirm 처리가 막히므로, 결과 처리는 별도 실행기에서 한다.
 
 ```java
-@Bean(name = "outboxConfirmExecutor", destroyMethod = "close")
-ExecutorService outboxConfirmExecutor() {
+@Bean(name = "mqConfirmExecutor", destroyMethod = "close")
+ExecutorService mqConfirmExecutor() {
     return Executors.newVirtualThreadPerTaskExecutor();
 }
 ```
@@ -115,9 +117,11 @@ ExecutorService outboxConfirmExecutor() {
 
 ## 2. 데이터베이스 마이그레이션
 
-확장 → 데이터 정리 → 전환 → 제거 순서로 진행한다. 현재 마지막 버전은 `V39`이다.
+확장 → 데이터 정리 → 전환 → 제거 순서로 진행한다. 비동기 작업 전 마지막 버전은 `V41`이다.
 
-### 2.1 `V40__create_message_outbox_and_async_job_columns.sql` (확장, 기존 코드와 호환)
+### 2.1 `V42__create_message_outbox_and_add_ai_job_constraints.sql` (확장, 기존 코드와 호환)
+
+`schedule_generation_jobs`는 V5에서 이미 만들어졌으나 쓰지 않던 테이블이다. 그래서 새로 만들지 않고 값 범위를 맞춘 뒤 제약과 인덱스를 추가한다. `photo_evaluations` 변경은 이 버전에 넣지 않고 포토미션 판정 작업에서 별도 버전으로 진행한다(아래 SQL의 `photo_evaluations` 부분과 2.2절).
 
 ```sql
 CREATE TABLE `message_outbox` (
@@ -141,35 +145,26 @@ CREATE TABLE `message_outbox` (
     INDEX `idx_message_outbox_job` (`job_type`, `job_id`)
 );
 
-CREATE TABLE `schedule_generation_jobs` (
-    `id`                     BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'AI 일정 생성 작업 ID',
-    `trip_id`                BIGINT       NOT NULL COMMENT '여행방 ID',
-    `requested_by_member_id` BIGINT       NOT NULL COMMENT '생성을 요청한 멤버십 ID',
-    `job_type`               VARCHAR(30)  NOT NULL COMMENT 'INITIAL, GENERAL_REGENERATION, WEATHER_REGENERATION',
-    `status`                 VARCHAR(20)  NOT NULL DEFAULT 'QUEUED' COMMENT 'QUEUED, SUCCEEDED, FAILED',
-    `stage`                  VARCHAR(30)  NOT NULL DEFAULT 'GATHERING_PREFERENCES' COMMENT '화면에 표시할 생성 단계',
-    `active_slot`            TINYINT      NULL     COMMENT '진행 중인 작업일 때만 1',
-    `idempotency_key`        BINARY(16)   NOT NULL COMMENT '중복 요청 방지 식별값',
-    `input_cutoff_at`        DATETIME(6)  NOT NULL COMMENT '설문 입력 스냅샷 기준 시각',
-    `attempt_count`          TINYINT      NOT NULL DEFAULT 0,
-    `started_at`             DATETIME(6)  NULL,
-    `finished_at`            DATETIME(6)  NULL,
-    `error_code`             VARCHAR(100) NULL     COMMENT '사용자에게 노출하지 않는 내부 오류 코드',
-    `created_at`             DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    `updated_at`             DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-    CONSTRAINT `PK_SCHEDULE_GENERATION_JOBS` PRIMARY KEY (`id`),
-    CONSTRAINT `uk_schedule_generation_jobs_active` UNIQUE (`trip_id`, `active_slot`),
-    CONSTRAINT `uk_schedule_generation_jobs_idempotency` UNIQUE (`idempotency_key`),
-    CONSTRAINT `fk_schedule_generation_jobs_trip_id` FOREIGN KEY (`trip_id`) REFERENCES `trips` (`id`),
-    CONSTRAINT `fk_schedule_generation_jobs_member_id` FOREIGN KEY (`requested_by_member_id`) REFERENCES `trip_members` (`id`),
-    INDEX `idx_schedule_generation_jobs_stale` (`status`, `created_at`)
-);
+-- V5에서 만든 테이블의 값 범위를 맞추고, 중복 방지 제약과 Stale 조회 인덱스를 추가한다
+ALTER TABLE `schedule_generation_jobs`
+    MODIFY COLUMN `job_type` VARCHAR(30) NOT NULL DEFAULT 'INITIAL'
+        COMMENT 'INITIAL, GENERAL_REGENERATION, WEATHER_REGENERATION',
+    MODIFY COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'QUEUED'
+        COMMENT 'QUEUED, SUCCEEDED, FAILED',
+    MODIFY COLUMN `updated_at` DATETIME(6) NOT NULL
+        DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6);
+ALTER TABLE `schedule_generation_jobs`
+    ADD CONSTRAINT `uk_schedule_generation_jobs_active` UNIQUE (`trip_id`, `active_slot`),
+    ADD CONSTRAINT `uk_schedule_generation_jobs_idempotency` UNIQUE (`idempotency_key`);
+CREATE INDEX `idx_schedule_generation_jobs_stale`
+    ON `schedule_generation_jobs` (`status`, `created_at`);
 
 ALTER TABLE `mission_generation_jobs`
     MODIFY COLUMN `status` VARCHAR(20) NOT NULL COMMENT 'QUEUED, RUNNING, SUCCEEDED, FAILED';
 CREATE INDEX `idx_mission_generation_jobs_stale`
     ON `mission_generation_jobs` (`status`, `last_attempted_at`);
 
+-- 아래는 V42에 넣지 않는다. 포토미션 판정 작업의 별도 버전에서 진행한다
 ALTER TABLE `photo_evaluations`
     ADD COLUMN `execution_attempt_count` TINYINT NOT NULL DEFAULT 0
         COMMENT '기술적 재시도 횟수(AI x-retry-count + 1)' AFTER `attempt_no`,
@@ -179,10 +174,10 @@ ALTER TABLE `photo_evaluations`
         COMMENT 'QUEUED, RUNNING, SUCCEEDED, RETRY_PENDING, FAILED';
 ```
 
-- `schedule_generation_jobs`는 새 테이블이므로 UNIQUE를 바로 건다.
+- `schedule_generation_jobs`는 아직 쓰지 않던 테이블이라 중복 데이터가 없으므로 UNIQUE를 바로 건다.
 - `photo_evaluations`의 판정 Stale 조회는 기존 인덱스 `idx_photo_evaluations_stale_running (execution_status, requested_at)`를 그대로 쓴다.
 
-### 2.2 `V41__cleanup_and_add_photo_evaluation_active_slot_unique.sql` (데이터 정리)
+### 2.2 포토미션 판정 데이터 정리 (판정 작업의 별도 버전)
 
 같은 사진에 진행 중인 판정이 두 개 이상이면 가장 최근 행만 진행 중으로 남기고, 나머지는 `FAILED`로 정리한 뒤 UNIQUE를 추가한다.
 
@@ -299,7 +294,7 @@ class RabbitTopologyConfig {
 | 컬럼 | 값 |
 | --- | --- |
 | `job_type`, `job_id` | 작업 종류, 방금 저장한 작업 ID |
-| `message_id` | UUIDv7 (BINARY(16)) |
+| `message_id` | UUID v4 (BINARY(16)) |
 | `exchange_name` / `routing_key` | `ai.request` / 작업별 routing key |
 | `payload` | 계약 문서 4.3절 요청 본문 |
 | `status` | `PENDING` |
@@ -336,7 +331,7 @@ rabbitTemplate.send(outbox.exchangeName(), outbox.routingKey(), message, cd);
 cd.getFuture()
   .orTimeout(props.confirmTimeout().toMillis(), TimeUnit.MILLISECONDS)
   .whenCompleteAsync((confirm, error) -> resultHandler.handle(outbox.id(), cd, confirm, error),
-                     outboxConfirmExecutor);
+                     mqConfirmExecutor);
 ```
 
 ---
@@ -370,12 +365,12 @@ next_attempt_at = now + backoff + random(0, backoff / 2)
 
 `last_error`에는 실패 종류와 메시지를 500자 이내로 저장한다.
 
-### 5.2 실패 처리 (`AiJobFailureService.failByPublish`)
+### 5.2 실패 처리 (`OutboxFailureService.fail`)
 
 하나의 트랜잭션에서 수행한다.
 
 1. `UPDATE message_outbox SET status='FAILED', last_error=? WHERE id=? AND status='PENDING'` → 0행이면 종료.
-2. 작업 테이블 조건부 UPDATE (12.2절 공통 규칙, `error_code = 'PUBLISH_FAILED'` 또는 `'PUBLISH_RETURNED'`).
+2. `AiJobPublishFailureListener` 구현이 작업 테이블을 조건부 UPDATE한다(12.2절 공통 규칙, `error_code = 'PUBLISH_FAILED'` 또는 `'PUBLISH_RETURNED'`). 일정 생성과 포토미션 생성은 `GenerationJobPublishFailureListener`가 `AiJobTerminationService`로 끝내고, 포토미션 판정은 판정 쪽 구현이 끝낸다.
 3. 2가 1행이면 실패 알림 저장 (14절). 포토미션 생성, 삭제된 여행은 알림을 만들지 않는다.
 4. 커밋 후 Redis Pub/Sub 발행.
 
@@ -421,6 +416,7 @@ Redis 조회가 실패하면 차단하지 않은 것으로 보고 진행한다. 
 | --- | --- | --- |
 | `AI_JOB_TEMPORARILY_UNAVAILABLE` | 503 | 요청이 많아 잠시 후 다시 시도해 주세요. |
 | `AI_JOB_ALREADY_IN_PROGRESS` | 409 | 이미 진행 중인 AI 작업이 있습니다. |
+| `IDEMPOTENCY_KEY_REUSED` | 409 | 다른 요청에 사용한 Idempotency-Key입니다. |
 
 `GlobalExceptionHandler`는 `AI_JOB_TEMPORARILY_UNAVAILABLE`일 때 `Retry-After` 헤더를 `planit.mq.retry-after` 초로 붙인다.
 
@@ -435,10 +431,13 @@ Redis 조회가 실패하면 차단하지 않은 것으로 보고 진행한다. 
 | `requested_by_member_id` | 요청자 `trip_members.id` |
 | `job_type` | `preparation.mode().name()` |
 | `status` / `active_slot` | `QUEUED` / `1` |
-| `idempotency_key` | 요청 헤더 `Idempotency-Key`가 있으면 그 값, 없으면 서버 UUIDv7 |
+| `idempotency_key` | 요청 헤더 `Idempotency-Key`가 있으면 그 값, 없으면 서버가 만든 UUID v4 |
 | `input_cutoff_at` | 현재 시각 |
 
-- `(trip_id, active_slot)` 중복이면 409 `AI_JOB_ALREADY_IN_PROGRESS`를 반환한다. `idempotency_key` 중복이면 기존 작업의 202 응답을 그대로 반환한다.
+- `Idempotency-Key`는 UUID여야 한다. UUID가 아니면 400 `INVALID_REQUEST`를 반환한다(비동기 경로만).
+- 같은 `Idempotency-Key`로 접수한 작업이 있으면 차단 확인, 사전 검증, 저장 없이 그 작업의 202 응답을 그대로 반환한다. 그 작업이 다른 여행의 작업이면 409 `IDEMPOTENCY_KEY_REUSED`를 반환한다.
+- `(trip_id, active_slot)` 중복이면 409 `AI_JOB_ALREADY_IN_PROGRESS`를 반환한다. 같은 키로 동시에 들어온 요청이 먼저 저장해 유일 제약에 걸린 경우에는 먼저 저장된 작업의 202를 반환한다.
+- 같은 키로 다시 요청하면 작업이 이미 끝났어도 응답 `status`는 `QUEUED`다. 결과는 알림으로 받는다.
 - 메시지: routing key `ai-schedule-generation`, `deadlineAt = created_at + 28분`, `request = preparation.request()`.
 
 ### 6.4 포토미션 판정
@@ -464,7 +463,7 @@ public void relay() { ... }
 ```
 
 1. `SELECT id FROM message_outbox WHERE status='PENDING' AND next_attempt_at <= now ORDER BY id LIMIT :batchSize` (500).
-2. 선점: `UPDATE message_outbox SET next_attempt_at = now + confirm-timeout + initial-grace WHERE id IN (...) AND status='PENDING'`.
+2. 선점: `UPDATE message_outbox SET next_attempt_at = now + confirm-timeout + initial-grace WHERE id IN (...) AND status='PENDING' AND next_attempt_at <= now`. 조회 뒤 다른 경로가 먼저 처리했거나 시각을 미룬 행은 선점하지 않는다. 그다음 `next_attempt_at`이 이번 선점 시각인 행만 다시 읽어 발행한다.
 3. 모든 행을 4.3절 방식으로 먼저 발행한다(confirm을 기다리지 않음).
 4. 각 `CorrelationData` Future를 남은 시간(`confirm-timeout` 기준) 안에서 기다린 뒤 5절 처리기로 반영한다.
 
@@ -487,7 +486,7 @@ public void check() { ... }
 | 포토미션 판정 | `execution_status='QUEUED' AND requested_at < now - 16분` |
 | 포토미션 생성 | `status='QUEUED' AND last_attempted_at < cutoff` (`cutoff` = now 이전의 가장 최근 06:00 KST) |
 
-대상 ID를 조회한 뒤 **건마다 한 트랜잭션**으로 처리한다.
+대상 ID를 조회한 뒤 **건마다 한 트랜잭션**(`StaleJobFailureService`)으로 처리한다. 한 건에서 오류가 나면 로그와 Sentry에 남기고 다음 건을 계속 처리한다. 포토미션 판정 Stale은 판정 작업에서 구현한다.
 
 1. 작업 조건부 UPDATE → `FAILED`, `error_code='STALE'`, `active_slot=NULL`. 0행이면 다음 건.
 2. `UPDATE message_outbox SET status='FAILED', last_error='STALE' WHERE job_type=? AND job_id=? AND status='PENDING'` (재발행 방지).
@@ -575,8 +574,8 @@ public void onMessage(Message message, Channel channel,
 
 ### 11.2 처리 순서
 
-1. 본문을 `AiResultEnvelope`로 파싱한다. 파싱에 실패하면 Sentry 경고 후 `ai.dlx`/`ai-result.dlq`로 발행하고 confirm 후 ACK한다.
-2. `jobType`으로 작업별 Handler를 고른다.
+1. 본문을 `AiResultEnvelope`로 파싱한다. 파싱에 실패하면 Sentry 경고 후 `ai.dlx`/`ai-result.dlq`로 발행(`x-error-kind=INVALID_MESSAGE`)하고 confirm 후 ACK한다.
+2. `jobType`으로 작업별 Handler를 고른다. Handler가 없는 작업 종류면 Sentry 경고 후 `x-error-kind=UNSUPPORTED_JOB_TYPE`으로 응답 DLQ에 보낸다.
 3. **한 트랜잭션**에서 다음을 수행한다.
    - 대상 여행이 삭제됐으면(`deleted_at IS NOT NULL`): 조건부 UPDATE로 `FAILED`(`error_code='TRIP_DELETED'`). 결과와 알림은 저장하지 않는다.
    - `status = FAILED` 결과: 조건부 UPDATE로 `FAILED`(`error_code = errorKind`).
@@ -590,9 +589,25 @@ public void onMessage(Message message, Channel channel,
 
 | 작업 | 조건부 UPDATE | 결과 반영 |
 | --- | --- | --- |
-| 일정 생성 | `UPDATE schedule_generation_jobs SET status=?, active_slot=NULL, finished_at=now, error_code=? WHERE id=? AND status='QUEUED'` | 기존 `ScheduleGenerationServiceImpl`의 응답 검증을 `ScheduleAiResultValidator`로 옮겨 쓴다. 통과하면 `AiRecommendedPlaceMapper.mapRoutes()` → `SchedulePersistenceService.saveCandidates(tripId, routes, ScheduleGenerationMode.valueOf(job_type))`. `RouteCalculationException`이면 트랜잭션을 롤백하고 새 트랜잭션에서 `FAILED`(`INVALID_AI_RESULT`) 처리 |
-| 포토미션 생성 | `UPDATE mission_generation_jobs SET status=? WHERE id=? AND status='QUEUED'` | 기존 `PhotoMissionGenerationTransactionService.complete()`의 미션·참여 상태 생성 로직을 쓴다. `RUNNING` 확인 대신 위 UPDATE 결과로 판단한다. 알림 없음 |
+| 일정 생성 (`ScheduleGenerationResultHandler`) | `UPDATE schedule_generation_jobs SET status=?, active_slot=NULL, finished_at=now, error_code=? WHERE id=? AND status='QUEUED'` | 아래 "일정 생성 결과 반영" 참고 |
+| 포토미션 생성 (`MissionGenerationResultHandler`) | `UPDATE mission_generation_jobs SET status=? WHERE id=? AND status='QUEUED'` | 아래 "포토미션 생성 결과 반영" 참고. 알림 없음 |
 | 포토미션 판정 | `UPDATE photo_evaluations SET execution_status=?, active_slot=NULL, execution_attempt_count=?, evaluated_at=now, error_code=? WHERE id=? AND execution_status='QUEUED'` | 기존 `PhotoMissionVerificationTransactionService.complete()`의 판정 결과·미션 완료 반영 로직을 쓴다. `execution_attempt_count`는 결과 메시지 헤더 `x-retry-count + 1` |
+
+**일정 생성 결과 반영**
+
+1. 진행 중(`QUEUED`)인 작업이 아니면 AI 응답을 읽지 않고 ACK한다.
+2. 여행이 삭제됐으면 `FAILED(TRIP_DELETED)`.
+3. 응답을 읽지 못하거나 `ScheduleAiResultValidator`(기존 `ScheduleGenerationServiceImpl`에서 분리한 검증)를 통과하지 못하면 `FAILED(INVALID_AI_RESULT)`와 실패 알림.
+4. 트랜잭션 밖에서 `AiRecommendedPlaceMapper.mapRoutes()` → `ScheduleRoutePlanner.plan()`(동기 경로에서 분리한 경로 계산)을 먼저 한다. `RouteCalculationException`이면 조건을 만족하는 동선이 없을 때 `FAILED(SCHEDULE_ROUTE_NOT_FOUND)`, 장소 값이 잘못됐을 때 `FAILED(INVALID_AI_RESULT)`.
+5. 장소를 저장한다(여행과 무관한 공용 데이터라 기존과 같이 따로 커밋).
+6. 한 트랜잭션에서 작업을 `SUCCEEDED`로 바꾸고, 1행일 때만 `SchedulePersistenceService.saveCandidates(tripId, plannedRoutes, placeIds, ScheduleGenerationMode.valueOf(job_type))`와 성공 알림을 저장한다.
+7. 6에서 업무 오류(`BusinessException`)가 나면 롤백한 뒤 새 트랜잭션에서 실패 처리한다. `error_code`는 오류 코드 이름(`SCHEDULE_REGENERATION_LIMIT_EXCEEDED` 등)이고, `TRIP_NOT_FOUND`는 `TRIP_DELETED`, `INVALID_AI_PLACE_RESULT`는 `INVALID_AI_RESULT`로 저장한다. 그 밖의 예외는 11.4절 재시도로 넘긴다.
+
+**포토미션 생성 결과 반영**
+
+1. 진행 중(`QUEUED`)인 작업이 아니면 ACK한다. 결과 본문을 읽지 못하면 `FAILED(INVALID_AI_RESULT)`.
+2. 한 트랜잭션에서 작업을 `SUCCEEDED`로 바꾸고(여행이 삭제됐으면 `FAILED(TRIP_DELETED)`), 1행일 때만 `PhotoMissionGenerationTransactionService.createMissions()`(기존 `complete()`에서 분리한 미션·참여 상태 생성)를 실행한다.
+3. `createMissions()`가 `PhotoMissionGenerationRejectedException`을 던지면 롤백한 뒤 새 트랜잭션에서 실패 처리한다. AI 결과가 방문 장소와 맞지 않거나 미션 범위가 잘못됐으면 `INVALID_AI_RESULT`, 확정 일정이나 방문 장소가 없으면 `MISSION_TARGET_NOT_FOUND`다. `mission_generation_jobs`에는 `error_code` 컬럼이 없어 로그로만 남긴다.
 
 ### 11.4 Result Worker 일시 오류
 
@@ -601,9 +616,11 @@ DB 일시 오류 등 3단계에서 예상하지 못한 예외가 나면 롤백 �
 | `x-result-retry-count` (없으면 0) | 발행 대상 |
 | --- | --- |
 | 0, 1, 2 | `ai.retry` / `ai-result.retry.{n+1}`, 헤더 `x-result-retry-count = n+1` |
-| 3 | `ai.dlx` / `ai-result.dlq`, 헤더 `x-error-kind`, `x-error-message`, `x-failed-at` |
+| 3 | `ai.dlx` / `ai-result.dlq`, 헤더 `x-error-kind=RESULT_PROCESSING_FAILED`, `x-error-message`(500자), `x-failed-at` |
 
 발행은 confirm을 받은 뒤 원본을 ACK한다. confirm 실패 시 `basicNack(tag, false, true)`로 재전달한다. 재전달이 5회를 넘으면 RabbitMQ가 `ai-result.dlq`로 보낸다.
+
+재발행 메시지는 원본 본문, `message_id`, `correlation_id`, `type`과 헤더를 그대로 옮긴다. RabbitMQ가 붙인 `x-death`, `x-first-death-*`, `x-last-death-*` 헤더는 옮기지 않는다.
 
 ### 11.5 응답 DLQ 수동 재처리
 
@@ -617,8 +634,8 @@ DB 일시 오류 등 3단계에서 예상하지 못한 예외가 나면 롤백 �
 
 | 큐 | Consumer |
 | --- | --- |
-| `ai.schedule-generation.dlq` | 있음 |
-| `ai.photomission-verification.dlq` | 있음 |
+| `ai.schedule-generation.dlq` | 있음 (`AiDlqListener`) |
+| `ai.photomission-verification.dlq` | 있음 (포토미션 판정 작업에서 구현) |
 | `ai.photomission-generation.dlq` | **없음** (13.2절 05시 재처리) |
 
 | 항목 | 값 |
@@ -633,7 +650,8 @@ DB 일시 오류 등 3단계에서 예상하지 못한 예외가 나면 롤백 �
 ### 12.2 처리 순서
 
 1. 작업 ID와 종류는 본문이 아니라 Basic Properties의 `correlation_id`, `type`에서 읽는다(파싱 실패 메시지도 처리하기 위해).
-2. `error_code`는 `x-error-kind` 헤더 값이다. 없고 `x-death[0].reason == "delivery_limit"`이면 `DELIVERY_LIMIT`이다.
+2. `error_code`는 `x-error-kind` 헤더 값(최대 100자)이다. 없고 `x-death[0].reason == "delivery_limit"`이면 `DELIVERY_LIMIT`, 둘 다 아니면 `DEAD_LETTERED`이다.
+   - `correlation_id`가 숫자가 아니거나 `type`이 큐의 작업 종류와 다르면 작업을 알 수 없으므로, 속성과 본문 앞 200자를 Sentry 오류로 남기고 ACK한다. 그 작업은 Stale Job Checker가 실패 처리한다.
 3. 한 트랜잭션에서 작업 조건부 UPDATE → `FAILED`, `active_slot=NULL`. 1행이고 여행이 삭제되지 않았으면 실패 알림을 저장한다.
 4. 커밋 후 Redis 발행, 그다음 ACK. 예외가 나면 `basicNack(tag, false, true)`.
 
@@ -645,31 +663,39 @@ DB 일시 오류 등 3단계에서 예상하지 못한 예외가 나면 롤백 �
 
 ### 13.1 스케줄러 변경
 
-기존 5분 주기 스케줄러와 00:30 마감 규칙은 플래그가 켜지면 동작하지 않는다. 미션 공개 시각(00:30)은 그대로다.
+기존 5분 주기 스케줄러(`PhotoMissionGenerationScheduler`)와 00:30 마감 규칙은 플래그가 켜지면 바로 끝난다. 미션 공개 시각(00:30)은 그대로다.
 
 ```java
+// PhotoMissionGenerationEnqueueScheduler
 @Scheduled(cron = "0 0 0 * * *", zone = "Asia/Seoul")
-@SchedulerLock(name = "photoMissionGeneration", lockAtMostFor = "PT5M")
+@SchedulerLock(name = "photoMissionGenerationEnqueue", lockAtMostFor = "PT5M")
 public void enqueue() { ... }
 ```
 
+- 락 이름은 기존 스케줄러(`photoMissionGeneration`)와 나눈다. 같은 이름이면 00:00에 기존 스케줄러가 락을 먼저 잡았을 때 새 스케줄러가 그날 접수를 건너뛴다. 두 스케줄러는 플래그로 한쪽만 일하므로 락을 나눠도 같은 여행을 두 번 처리하지 않는다.
+- 플래그가 꺼져 있거나 Redis 조회가 실패하면 접수하지 않는다(기존 스케줄러가 동작).
 - 대상 여행 조회는 기존 `TripRepository.findPhotoMissionGenerationTargetIds`를 쓴다.
-- 여행마다 한 트랜잭션에서 `mission_generation_jobs`를 `QUEUED`(기존 행이 있으면 `status='QUEUED'`, `attempt_count+1`, `last_attempted_at=now`)로 저장하고 Outbox 행을 만든다. 커밋 후 즉시 발행한다.
+- 여행마다 한 트랜잭션(`PhotoMissionGenerationEnqueueService`)에서 `mission_generation_jobs`를 `QUEUED`로 저장하고 Outbox 행을 만든다. 커밋 후 즉시 발행한다. 한 여행이 실패해도 로그와 Sentry에 남기고 다음 여행을 처리한다.
+  - 행이 없으면 새로 만든다(`attempt_count=1`).
+  - `FAILED`이거나 동기 실행 중 5분 넘게 멈춘 `RUNNING`이면 다시 접수한다(`status='QUEUED'`, `attempt_count+1`, `last_attempted_at=now`).
+  - 아직 동기 실행 중인 `RUNNING`, 이미 접수한 `QUEUED`, `SUCCEEDED`는 다시 접수하지 않는다.
 - 메시지: routing key `ai-photomission-generation`, `deadlineAt` = 당일 06:00 KST, `request = loadRequest()`의 결과.
 
-### 13.2 05시 DLQ 재처리 — `PhotoMissionDlqReprocessor`
+### 13.2 05시 DLQ 재처리 — `PhotoMissionGenerationDlqReprocessor`
+
+포토미션 판정과 구분되도록 클래스와 락 이름에 생성 작업임을 드러낸다.
 
 ```java
 @Scheduled(cron = "0 0 5 * * *", zone = "Asia/Seoul")
-@SchedulerLock(name = "photoMissionDlqReprocessor", lockAtMostFor = "60s")
+@SchedulerLock(name = "photoMissionGenerationDlqReprocessor", lockAtMostFor = "PT60S")
 public void reprocess() { ... }
 ```
 
 `rabbitTemplate.execute(channel -> ...)` 안에서 반복한다.
 
 1. `GetResponse r = channel.basicGet("ai.photomission-generation.dlq", false)`. `null`이면 종료한다.
-2. 본문의 `deadlineAt`이 지났으면 발행하지 않고 `basicAck`한다(이미 Stale 대상).
-3. 같은 본문과 `message_id`, `correlation_id`, `type`으로 헤더 `x-retry-count = 4`를 붙여 `ai.request` / `ai-photomission-generation`에 발행한다. `x-error-*`, `x-death` 헤더는 복사하지 않는다.
+2. 본문의 `deadlineAt`이 지났으면 발행하지 않고 `basicAck`한다(이미 Stale 대상). 본문에서 `deadlineAt`을 읽을 수 없으면(JSON이 아니거나 값이 없거나 형식이 틀림) Sentry 오류로 남기고 `basicAck`해 버린다. 이런 메시지는 AI Worker도 영구 오류로 처리한다.
+3. 같은 본문과 `message_id`, `correlation_id`, `type`으로 헤더 `x-retry-count = 4`를 붙여 `ai.request` / `ai-photomission-generation`에 발행한다. `x-error-*`, `x-failed-at`, `x-death`, `x-first-death-*`, `x-last-death-*` 헤더는 복사하지 않는다.
 4. confirm(ack, return 없음)을 받으면 `basicAck(r.getEnvelope().getDeliveryTag(), false)`.
 5. confirm 실패나 시간 초과면 `basicNack(tag, false, true)`로 되돌리고 반복을 멈춘다. Sentry 경고를 보낸다.
 
@@ -734,6 +760,7 @@ lockAtMostFor는 60초다. 05:00에 한 번만 실행되므로, 반복이 60초�
 2. AI Worker 배포.
 3. 202 응답을 처리하는 프론트 배포.
 4. 포토미션 판정 → 포토미션 생성 → 일정 생성 순서로 플래그를 켠다.
+   - 포토미션 생성 플래그는 00:30 이후에 켠다. 새 스케줄러는 00:00에 한 번만 돌기 때문에 00:00~00:30 사이에 켜면 기존 스케줄러는 멈추고 새 스케줄러는 다음 날에야 돌아, 그날 아직 생성하지 않은 여행은 미션이 생기지 않는다.
 5. 오류가 나면 해당 작업의 플래그를 지워 동기 경로로 되돌리고 원인을 분석한다.
 
 ### 15.3 완전 전환 조건
@@ -769,6 +796,7 @@ Testcontainers RabbitMQ와 MySQL을 쓴다. confirm 유실, 연결 끊김은 Tox
 | 모니터 | `messages_ready` 95% | 차단 플래그 생성, 50%에서 해제 |
 | 모니터 | DLQ consumer 0 | 차단 플래그 + Sentry (포토미션 생성 제외) |
 | 05시 재처리 | DLQ 메시지 1건 | `x-retry-count=4`로 Task Queue 이동, DLQ ACK |
+| 05시 재처리 | 재발행 confirm 실패 | 메시지가 DLQ에 남고 재처리 중단 |
 | 정리 | 월요일 03:00 | `PUBLISHED` 전부, 30일 지난 `FAILED` 삭제 |
 
 ---
@@ -780,4 +808,3 @@ Testcontainers RabbitMQ와 MySQL을 쓴다. confirm 유실, 연결 끊김은 Tox
 | 항목 | 위치 | 상태 |
 | --- | --- | --- |
 | `CONFIRM_TIMEOUT` | `planit.mq.confirm-timeout` | 5초 임시, 부하 테스트 max로 확정 |
-| 최초 `next_attempt_at` 유예(`initial-grace`) | 4.1절 | 스펙의 "+a"를 기본 백오프 5초로 둠. 확인 필요 |

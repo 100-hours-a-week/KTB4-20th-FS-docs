@@ -244,6 +244,11 @@ Retry Queue의 `x-max-length`(응답은 `x-max-length-bytes`)는 같은 작업�
 | `IMAGE_NOT_FOUND` | 재시도 불가 | 판정 사진 없음(404) |
 | `UNSUPPORTED_IMAGE` | 재시도 불가 | 지원하지 않는 이미지 형식 |
 | `DELIVERY_LIMIT` | — | RabbitMQ가 `x-delivery-limit` 초과로 dead-letter함 (소비자가 판별) |
+| `DEAD_LETTERED` | — | 요청 DLQ 메시지에 `x-error-kind`도 `delivery_limit` 기록도 없음. 운영자가 수동으로 옮긴 메시지 등 (백엔드 DLQ Consumer가 판별) |
+| `UNSUPPORTED_JOB_TYPE` | — | 결과 메시지는 정상이지만 그 `jobType`의 결과 Handler가 백엔드에 없음 (백엔드가 응답 DLQ로 보낼 때만 사용) |
+| `RESULT_PROCESSING_FAILED` | — | 결과 반영 중 일시 오류가 Result Retry Queue 재시도 3회 후에도 계속됨 (백엔드가 응답 DLQ로 보낼 때만 사용) |
+
+`DEAD_LETTERED`, `UNSUPPORTED_JOB_TYPE`, `RESULT_PROCESSING_FAILED`는 백엔드만 쓰는 값이다. AI Worker는 결과 메시지 `errorKind`나 요청 DLQ의 `x-error-kind`에 이 값을 쓰지 않는다. 응답 DLQ의 `INVALID_MESSAGE`는 백엔드가 결과 메시지 본문을 읽지 못했을 때도 쓴다.
 
 ---
 
